@@ -26,7 +26,7 @@ workflow:
       description: "Creates implementation plan from issue"
 
     - id: coder
-      backend: openclaw-skill
+      backend: openclaw
       model_profile: coding-default
       description: "Implements code changes based on plan"
 
@@ -35,21 +35,18 @@ workflow:
       model_profile: review-default
       description: "Reviews code changes"
 
-  tools:
-    - id: github-read
-      adapter: openclaw-tools
-
-    - id: github-write
-      adapter: openclaw-tools
-
     - id: test-runner
-      adapter: openclaw-tools
+      backend: openclaw
+      description: "Runs test suite against implementation"
+
+    - id: pr-creator
+      backend: openclaw
+      description: "Creates pull request with implementation"
 
   policies:
     - id: default-policy
       inline:
-        allowed_backends: [langgraph, openclaw-skill]
-        allowed_tools: [github-read, github-write, test-runner]
+        allowed_backends: [langgraph, openclaw]
         timeout_seconds: 600
         max_tokens: 100000
 
@@ -90,8 +87,8 @@ workflow:
       next: test
 
     - id: test
-      type: tool
-      tool: test-runner
+      type: agent
+      agent: test-runner
       description: "Run test suite against implementation"
       input:
         repo: "${inputs.repo}"
@@ -119,8 +116,8 @@ workflow:
       next: create-pr
 
     - id: create-pr
-      type: tool
-      tool: github-write
+      type: agent
+      agent: pr-creator
       description: "Create pull request"
       input:
         repo: "${inputs.repo}"

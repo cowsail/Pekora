@@ -387,7 +387,7 @@ class RunEntity private constructor(
                     stepId = stepId,
                     stepKind = step.type,
                     backend = backend,
-                    definitionRef = step.agent ?: step.tool ?: step.skill ?: "",
+                    definitionRef = step.agent ?: "",
                     input = resolvedInput,
                     constraints = StepConstraints(
                         timeoutSeconds = step.timeout ?: 300,

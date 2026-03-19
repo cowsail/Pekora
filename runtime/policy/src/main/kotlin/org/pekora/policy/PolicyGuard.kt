@@ -1,15 +1,12 @@
 /**
  * Policy evaluation engine for the Pekko Agent Workflow Framework.
  *
- * This file implements the policy guard described in **Section 6.2** (Policy Model) and
- * **Section 14** (Policy Enforcement) of the framework specification. The [PolicyGuard]
- * evaluates whether a given step, tool call, or skill call is permitted under the
- * currently active policy chain.
+ * Evaluates whether a given step is permitted under the currently active policy chain.
  *
  * Policies compose using a **most-restrictive-wins** strategy: when multiple policies
  * apply to the same execution context, the guard merges them by taking the intersection
- * of allowed backends/tools/skills, enforcing approval if *any* policy requires it,
- * and selecting the smallest timeout and token budget across all policies.
+ * of allowed backends, enforcing approval if *any* policy requires it, and selecting
+ * the smallest timeout and token budget across all policies.
  *
  * @see PolicyDefinition
  * @see PolicyDecision
@@ -17,19 +14,15 @@
 package org.pekora.policy
 
 import org.pekora.dsl.*
-import kotlin.collections.get
-import kotlin.text.contains
 
 /**
- * Evaluates whether steps, tool calls, and skill calls are permitted under the active
- * policy chain (Section 6.2, Section 14).
+ * Evaluates whether steps are permitted under the active policy chain.
  *
  * The guard holds an optional list of global (workflow-level) policies and combines them
  * with any step-level policies supplied at evaluation time. When policies overlap, the
  * most restrictive constraint wins:
  *
- * - **Allowed backends / tools / skills**: a resource must appear in *every* non-empty
- *   allowlist to be considered permitted.
+ * - **Allowed backends**: a backend must appear in *every* non-empty allowlist to be permitted.
  * - **Approval requirement**: if *any* policy sets [PolicyDefinition.requireApproval],
  *   the resulting [PolicyDecision.requiresApproval] is `true`.
  * - **Timeout / max-tokens**: the *minimum* value across all policies is selected so
@@ -47,13 +40,9 @@ class PolicyGuard(
      * Evaluates whether a step execution is permitted under the combined step-level and
      * global policies.
      *
-     * Depending on [StepDefinition.type], the method checks:
-     * - **AGENT** steps: whether the agent's backend is in [PolicyDefinition.allowedBackends].
-     * - **TOOL** steps: whether the tool identifier is in [PolicyDefinition.allowedTools].
-     * - **SKILL** steps: whether the skill identifier is in [PolicyDefinition.allowedSkills].
-     *
-     * After collecting violations the method also derives the effective approval
-     * requirement, timeout, and max-token budget from the merged policy chain.
+     * For AGENT steps, checks whether the agent's backend is in [PolicyDefinition.allowedBackends].
+     * Also derives the effective approval requirement, timeout, and max-token budget from
+     * the merged policy chain.
      *
      * @param step The step definition to evaluate.
      * @param agents A map of agent identifiers to their definitions, used to resolve the
@@ -73,27 +62,12 @@ class PolicyGuard(
         val violations = mutableListOf<String>()
 
         for (policy in effectivePolicies) {
-            // Check backend
             if (step.type == StepKind.AGENT && step.agent != null) {
                 val agent = agents[step.agent]
                 if (agent != null && policy.allowedBackends.isNotEmpty()) {
                     if (agent.backend !in policy.allowedBackends) {
                         violations.add("Backend '${agent.backend}' not in allowed backends: ${policy.allowedBackends}")
                     }
-                }
-            }
-
-            // Check tool
-            if (step.type == StepKind.TOOL && step.tool != null) {
-                if (policy.allowedTools.isNotEmpty() && step.tool !in policy.allowedTools) {
-                    violations.add("Tool '${step.tool}' not in allowed tools: ${policy.allowedTools}")
-                }
-            }
-
-            // Check skill
-            if (step.type == StepKind.SKILL && step.skill != null) {
-                if (policy.allowedSkills.isNotEmpty() && step.skill !in policy.allowedSkills) {
-                    violations.add("Skill '${step.skill}' not in allowed skills: ${policy.allowedSkills}")
                 }
             }
         }
@@ -108,62 +82,6 @@ class PolicyGuard(
             requiresApproval = requiresApproval,
             effectiveTimeoutSeconds = maxTimeout,
             effectiveMaxTokens = maxTokens,
-        )
-    }
-
-    /**
-     * Evaluates a tool invocation request against the combined step-level and global policies.
-     *
-     * Each policy with a non-empty [PolicyDefinition.allowedTools] list is checked; if the
-     * given [toolId] does not appear in any such list, a violation is recorded.
-     *
-     * @param toolId The identifier of the tool being invoked.
-     * @param policies Step-level policies to merge with [globalPolicies].
-     * @return A [PolicyDecision] with [PolicyDecision.allowed] set to `false` if the tool
-     *   is blocked by any policy, along with descriptive violation messages.
-     * @see PolicyDecision
-     */
-    fun evaluateToolCall(toolId: String, policies: List<PolicyDefinition>): PolicyDecision {
-        val effectivePolicies = policies + globalPolicies
-        val violations = mutableListOf<String>()
-
-        for (policy in effectivePolicies) {
-            if (policy.allowedTools.isNotEmpty() && toolId !in policy.allowedTools) {
-                violations.add("Tool '$toolId' not allowed by policy '${policy.id}'")
-            }
-        }
-
-        return PolicyDecision(
-            allowed = violations.isEmpty(),
-            violations = violations,
-        )
-    }
-
-    /**
-     * Evaluates a skill invocation request against the combined step-level and global policies.
-     *
-     * Each policy with a non-empty [PolicyDefinition.allowedSkills] list is checked; if
-     * the given [skillId] does not appear in any such list, a violation is recorded.
-     *
-     * @param skillId The identifier of the skill being invoked.
-     * @param policies Step-level policies to merge with [globalPolicies].
-     * @return A [PolicyDecision] with [PolicyDecision.allowed] set to `false` if the skill
-     *   is blocked by any policy, along with descriptive violation messages.
-     * @see PolicyDecision
-     */
-    fun evaluateSkillCall(skillId: String, policies: List<PolicyDefinition>): PolicyDecision {
-        val effectivePolicies = policies + globalPolicies
-        val violations = mutableListOf<String>()
-
-        for (policy in effectivePolicies) {
-            if (policy.allowedSkills.isNotEmpty() && skillId !in policy.allowedSkills) {
-                violations.add("Skill '$skillId' not allowed by policy '${policy.id}'")
-            }
-        }
-
-        return PolicyDecision(
-            allowed = violations.isEmpty(),
-            violations = violations,
         )
     }
 }

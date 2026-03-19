@@ -8,8 +8,9 @@ include(
     "runtime:projection",
     "adapters:common",
     "adapters:langgraph",
-    "adapters:openclaw-tools",
-    "adapters:openclaw-skills",
+    "adapters:generic",
+    "adapters:strands",
+    "adapters:openclaw",
     "sdk:dsl",
     "sdk:client",
 )

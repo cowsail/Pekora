@@ -16,7 +16,7 @@ import kotlinx.serialization.Serializable
 /**
  * Top-level workflow definition — the parsed representation of a workflow YAML/JSON.
  *
- * A workflow definition contains all the metadata, agent declarations, tool/skill references,
+ * A workflow definition contains all the metadata, agent declarations,
  * policy bindings, and the step graph that describes how the workflow executes.
  *
  * Workflow definitions are immutable once published as a [WorkflowVersion].
@@ -41,8 +41,6 @@ import kotlinx.serialization.Serializable
  * @property inputs Schema definition for the workflow's required inputs.
  * @property outputs Schema definition for the workflow's expected outputs.
  * @property agents List of agent declarations available to steps in this workflow.
- * @property tools List of tool references available to steps in this workflow.
- * @property skills List of skill references available to steps in this workflow.
  * @property policies List of policy references that govern execution.
  * @property steps The ordered list of steps that form the workflow graph.
  */
@@ -54,8 +52,6 @@ data class WorkflowDefinition(
     val inputs: SchemaDefinition? = null,
     val outputs: SchemaDefinition? = null,
     val agents: List<AgentDefinition> = emptyList(),
-    val tools: List<ToolReference> = emptyList(),
-    val skills: List<SkillReference> = emptyList(),
     val policies: List<PolicyReference> = emptyList(),
     val steps: List<StepDefinition>,
 )
@@ -115,43 +111,6 @@ data class AgentDefinition(
     val config: Map<String, String> = emptyMap(),
 )
 
-// --- Tool & Skill References ---
-
-/**
- * Reference to a tool available within a workflow.
- *
- * Tools are atomic callable capabilities (e.g., `"github-read"`, `"test-runner"`).
- * They are invoked through a [org.pekora.adapters.ToolAdapter].
- *
- * @property id Unique identifier for the tool.
- * @property adapter The adapter that handles invocation (e.g., `"openclaw-tools"`, `"native"`).
- * @property config Adapter-specific configuration key-value pairs.
- */
-@Serializable
-data class ToolReference(
-    val id: String,
-    val adapter: String = "native",
-    val config: Map<String, String> = emptyMap(),
-)
-
-/**
- * Reference to a skill available within a workflow.
- *
- * Skills are higher-level capabilities that may call multiple tools or prepare environments
- * (e.g., a coding skill that checks out a repo, writes code, and runs tests).
- * They are invoked through a [org.pekora.adapters.SkillAdapter].
- *
- * @property id Unique identifier for the skill.
- * @property adapter The adapter that handles invocation (e.g., `"openclaw-skills"`, `"native"`).
- * @property config Adapter-specific configuration key-value pairs.
- */
-@Serializable
-data class SkillReference(
-    val id: String,
-    val adapter: String = "native",
-    val config: Map<String, String> = emptyMap(),
-)
-
 /**
  * Reference to a policy that governs workflow or step execution.
  *
@@ -175,8 +134,6 @@ data class PolicyReference(
  * Each step kind determines how the [org.pekora.engine.StepExecutor] dispatches execution:
  *
  * - [AGENT] — delegated to an [org.pekora.adapters.AgentRuntimeAdapter]
- * - [TOOL] — dispatched to a [org.pekora.adapters.ToolAdapter]
- * - [SKILL] — dispatched to a [org.pekora.adapters.SkillAdapter]
  * - [DECISION] — evaluates conditions and branches
  * - [APPROVAL] — pauses execution until a human approves or rejects
  * - [PARALLEL] — executes multiple steps concurrently (Phase 4)
@@ -187,8 +144,6 @@ data class PolicyReference(
 @Serializable
 enum class StepKind {
     @SerialName("agent") AGENT,
-    @SerialName("tool") TOOL,
-    @SerialName("skill") SKILL,
     @SerialName("decision") DECISION,
     @SerialName("approval") APPROVAL,
     @SerialName("parallel") PARALLEL,
@@ -207,8 +162,6 @@ enum class StepKind {
  * @property id Unique identifier for this step within the workflow.
  * @property type The kind of step, determining execution behavior.
  * @property agent Reference to an [AgentDefinition.id] (required when [type] is [StepKind.AGENT]).
- * @property tool Reference to a [ToolReference.id] (required when [type] is [StepKind.TOOL]).
- * @property skill Reference to a [SkillReference.id] (required when [type] is [StepKind.SKILL]).
  * @property input Map of input parameters. Values may contain `${'$'}{...}` expression references.
  * @property output Map of output parameters for [StepKind.RESULT] steps.
  * @property next The ID of the next step to execute after this one completes, or `null` if terminal.
@@ -227,8 +180,6 @@ data class StepDefinition(
     val id: String,
     val type: StepKind,
     val agent: String? = null,
-    val tool: String? = null,
-    val skill: String? = null,
     val input: Map<String, String> = emptyMap(),
     val output: Map<String, String> = emptyMap(),
     val next: String? = null,
@@ -289,8 +240,6 @@ data class RetryConfig(
  * @property id Unique identifier for this policy.
  * @property allowedBackends List of permitted backend identifiers. Empty means all are allowed.
  * @property allowedModels List of permitted model identifiers. Empty means all are allowed.
- * @property allowedTools List of permitted tool identifiers. Empty means all are allowed.
- * @property allowedSkills List of permitted skill identifiers. Empty means all are allowed.
  * @property maxTokens Maximum token budget for a single step execution.
  * @property timeoutSeconds Maximum execution time in seconds.
  * @property sideEffectClass Classification of the side effects this policy permits.
@@ -303,8 +252,6 @@ data class PolicyDefinition(
     val id: String = "",
     @SerialName("allowed_backends") val allowedBackends: List<String> = emptyList(),
     @SerialName("allowed_models") val allowedModels: List<String> = emptyList(),
-    @SerialName("allowed_tools") val allowedTools: List<String> = emptyList(),
-    @SerialName("allowed_skills") val allowedSkills: List<String> = emptyList(),
     @SerialName("max_tokens") val maxTokens: Long? = null,
     @SerialName("timeout_seconds") val timeoutSeconds: Int? = null,
     @SerialName("side_effect_class") val sideEffectClass: SideEffectClass = SideEffectClass.READ_ONLY,

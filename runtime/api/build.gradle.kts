@@ -8,7 +8,7 @@ plugins {
 }
 
 application {
-    mainClass.set("org.pekkoagent.api.FrameworkServer")
+    mainClass.set("org.pekora.api.FrameworkServer")
 }
 
 dependencies {
@@ -17,6 +17,10 @@ dependencies {
     implementation(project(":runtime:workflow-registry"))
     implementation(project(":runtime:policy"))
     implementation(project(":adapters:common"))
+    implementation(project(":adapters:langgraph"))
+    implementation(project(":adapters:openclaw"))
+    implementation(project(":adapters:strands"))
+    implementation(project(":adapters:generic"))
     implementation("org.apache.pekko:pekko-actor-typed_3:$pekkoVersion")
     implementation("org.apache.pekko:pekko-cluster-typed_3:$pekkoVersion")
     implementation("org.apache.pekko:pekko-cluster-sharding-typed_3:$pekkoVersion")

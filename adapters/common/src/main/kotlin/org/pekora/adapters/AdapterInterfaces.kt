@@ -1,21 +1,18 @@
 /**
  * Adapter interfaces for the Pekko Agent Workflow Framework.
  *
- * The adapter layer (Section 11 of the design spec) makes external runtimes pluggable.
- * Each adapter implements a standard contract so the framework can dispatch to any
- * backend without knowing its internal details.
+ * The adapter layer makes external runtimes pluggable. Each adapter implements a standard
+ * contract so the framework can dispatch to any backend without knowing its internal details.
  *
- * The framework provides three primary adapter interfaces:
- * - [AgentRuntimeAdapter] — for executing steps in external agent runtimes (LangGraph, Strands, etc.)
- * - [ToolAdapter] — for invoking individual tools (OpenClaw tools, custom tools)
- * - [SkillAdapter] — for invoking higher-level skills (OpenClaw skills, custom skills)
+ * The framework provides one primary adapter interface:
+ * - [AgentRuntimeAdapter] — for executing steps in external agent runtimes (LangGraph, Strands, OpenClaw, etc.)
  *
  * And one infrastructure adapter:
  * - [WorkspaceAdapter] — for managing workspace lifecycle (repo checkout, sandbox environments)
  *
  * ## Implementing a Custom Adapter
  *
- * To add a new backend, implement the appropriate interface and register it with the
+ * To add a new backend, implement [AgentRuntimeAdapter] and register it with the
  * [org.pekora.engine.StepExecutor]:
  *
  * ```kotlin
@@ -29,12 +26,13 @@
  * ```
  *
  * @see org.pekora.adapters.langgraph.LangGraphAdapter
- * @see org.pekora.adapters.openclaw.tools.OpenClawToolAdapter
- * @see org.pekora.adapters.openclaw.skills.OpenClawSkillAdapter
+ * @see org.pekora.adapters.openclaw.OpenClawAdapter
+ * @see org.pekora.adapters.generic.GenericAdapter
  */
 package org.pekora.adapters
 
-import org.pekora.dsl.*
+import org.pekora.dsl.StepExecutionRequest
+import org.pekora.dsl.StepExecutionResult
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
@@ -97,53 +95,6 @@ interface AgentRuntimeAdapter {
     fun validateDefinition(definition: Map<String, String>): CompletionStage<ValidationResult> {
         return CompletableFuture.completedFuture(ValidationResult(valid = true))
     }
-}
-
-/**
- * Adapter for invoking individual tools.
- *
- * Tools are atomic callable capabilities (e.g., reading a GitHub issue, running tests).
- * The [org.pekora.engine.StepExecutor] dispatches [StepKind.TOOL] steps through this interface.
- *
- * @see org.pekora.adapters.openclaw.tools.OpenClawToolAdapter
- */
-interface ToolAdapter {
-    /**
-     * Unique identifier for this tool adapter (e.g., `"openclaw-tools"`, `"native"`).
-     */
-    val adapterId: String
-
-    /**
-     * Invokes a tool asynchronously.
-     *
-     * @param request The tool invocation request with tool ID, inputs, and correlation data.
-     * @return A [CompletionStage] that completes with the tool invocation result.
-     */
-    fun invoke(request: ToolInvocationRequest): CompletionStage<ToolInvocationResult>
-}
-
-/**
- * Adapter for invoking higher-level skills.
- *
- * Skills are reusable capabilities that may call multiple tools or prepare environments
- * (e.g., a coding skill that checks out a repo, writes code, and runs tests).
- * The [org.pekora.engine.StepExecutor] dispatches [StepKind.SKILL] steps through this interface.
- *
- * @see org.pekora.adapters.openclaw.skills.OpenClawSkillAdapter
- */
-interface SkillAdapter {
-    /**
-     * Unique identifier for this skill adapter (e.g., `"openclaw-skills"`, `"native"`).
-     */
-    val adapterId: String
-
-    /**
-     * Invokes a skill asynchronously.
-     *
-     * @param request The skill invocation request with skill ID, inputs, and correlation data.
-     * @return A [CompletionStage] that completes with the skill invocation result.
-     */
-    fun invoke(request: SkillInvocationRequest): CompletionStage<SkillInvocationResult>
 }
 
 /**

@@ -289,7 +289,7 @@ class RunProjectionStore {
      * Returns all runs that are currently in an active (non-terminal) state.
      *
      * Active states include [RunState.EXECUTING], [RunState.WAITING_FOR_APPROVAL],
-     * [RunState.WAITING_ON_TOOL], and [RunState.WAITING_ON_SKILL].
+     * and [RunState.WAITING_FOR_EXTERNAL_EVENT].
      *
      * @return A list of [RunSummary] objects for all currently active runs.
      * @see RunSummary
@@ -297,7 +297,7 @@ class RunProjectionStore {
      */
     fun getActiveRuns(): List<RunSummary> {
         return summaries.values.filter {
-            it.status in listOf(RunState.EXECUTING, RunState.WAITING_FOR_APPROVAL, RunState.WAITING_ON_TOOL, RunState.WAITING_ON_SKILL)
+            it.status in listOf(RunState.EXECUTING, RunState.WAITING_FOR_APPROVAL, RunState.WAITING_FOR_EXTERNAL_EVENT)
         }
     }
 

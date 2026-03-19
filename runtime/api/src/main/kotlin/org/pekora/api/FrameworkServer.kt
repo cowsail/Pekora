@@ -32,6 +32,10 @@ import org.apache.pekko.cluster.sharding.typed.javadsl.Entity
 import org.apache.pekko.http.javadsl.Http
 import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.persistence.typed.PersistenceId
+import org.pekora.adapters.generic.GenericAdapter
+import org.pekora.adapters.langgraph.LangGraphAdapter
+import org.pekora.adapters.openclaw.OpenClawAdapter
+import org.pekora.adapters.strands.StrandsAdapter
 import org.pekora.engine.*
 import org.pekora.registry.*
 import org.pekora.policy.PolicyGuard
@@ -101,13 +105,19 @@ object FrameworkServer {
         val approvalManager = ctx.spawn(ApprovalManager.create(), "approval-manager")
         logger.info("ApprovalManager started")
 
-        // Initialize step executor
+        // Initialize step executor with agent adapters
         val policyGuard = PolicyGuard()
+        val agentAdapters = mapOf(
+            "langgraph" to LangGraphAdapter(),
+            "openclaw" to OpenClawAdapter(),
+            "strands" to StrandsAdapter(),
+            "generic" to GenericAdapter.http("generic", "http://localhost:8400"),
+        )
         val stepExecutor = ctx.spawn(
-            StepExecutor.create(policyGuard = policyGuard),
+            StepExecutor.create(agentAdapters = agentAdapters, policyGuard = policyGuard),
             "step-executor",
         )
-        logger.info("StepExecutor started")
+        logger.info("StepExecutor started with adapters: ${agentAdapters.keys}")
 
         // Initialize cluster sharding for RunEntity
         val sharding = ClusterSharding.get(system)

@@ -1,16 +1,14 @@
 /**
  * Execution models for the step execution pipeline.
  *
- * This file defines the canonical request/result envelopes used for all step, tool,
- * and skill executions, as well as the run and step state enumerations.
+ * This file defines the canonical request/result envelopes used for all step
+ * executions, as well as the run and step state enumerations.
  *
- * Every step execution — regardless of backend — flows through these canonical types,
- * ensuring a uniform interface between the [org.pekora.engine.RunEntity],
+ * Every step execution flows through these canonical types, ensuring a uniform
+ * interface between the [org.pekora.engine.RunEntity],
  * [org.pekora.engine.StepExecutor], and adapter implementations.
  *
  * @see org.pekora.adapters.AgentRuntimeAdapter
- * @see org.pekora.adapters.ToolAdapter
- * @see org.pekora.adapters.SkillAdapter
  */
 package org.pekora.dsl
 
@@ -55,15 +53,11 @@ data class StepExecutionRequest(
  * Adapters must respect these constraints or report a violation.
  *
  * @property timeoutSeconds Maximum allowed execution time in seconds.
- * @property allowedTools List of tool IDs the step is permitted to invoke.
- * @property allowedSkills List of skill IDs the step is permitted to invoke.
  * @property budget Token budget constraints.
  */
 @Serializable
 data class StepConstraints(
     @SerialName("timeout_seconds") val timeoutSeconds: Int = 300,
-    @SerialName("allowed_tools") val allowedTools: List<String> = emptyList(),
-    @SerialName("allowed_skills") val allowedSkills: List<String> = emptyList(),
     val budget: BudgetConstraints = BudgetConstraints(),
 )
 
@@ -164,77 +158,7 @@ data class ExecutionMetrics(
     @SerialName("tokens_used") val tokensUsed: Long = 0,
 )
 
-// --- Tool/Skill Invocation ---
-
-/**
- * Request to invoke a tool through a [org.pekora.adapters.ToolAdapter].
- *
- * @property runId The parent run ID for correlation.
- * @property stepId The step that triggered this tool invocation.
- * @property toolId The unique identifier of the tool to invoke.
- * @property input Input parameters for the tool.
- * @property correlationId Correlation ID for distributed tracing.
- */
-@Serializable
-data class ToolInvocationRequest(
-    @SerialName("run_id") val runId: String,
-    @SerialName("step_id") val stepId: String,
-    @SerialName("tool_id") val toolId: String,
-    val input: Map<String, String> = emptyMap(),
-    @SerialName("correlation_id") val correlationId: String = "",
-)
-
-/**
- * Result of a tool invocation.
- *
- * @property status Outcome of the invocation.
- * @property output Key-value output data from the tool.
- * @property error Error message if the invocation failed.
- * @property metrics Performance metrics for the invocation.
- */
-@Serializable
-data class ToolInvocationResult(
-    val status: StepResultStatus,
-    val output: Map<String, String> = emptyMap(),
-    val error: String? = null,
-    val metrics: ExecutionMetrics = ExecutionMetrics(),
-)
-
-/**
- * Request to invoke a skill through a [org.pekora.adapters.SkillAdapter].
- *
- * @property runId The parent run ID for correlation.
- * @property stepId The step that triggered this skill invocation.
- * @property skillId The unique identifier of the skill to invoke.
- * @property input Input parameters for the skill.
- * @property correlationId Correlation ID for distributed tracing.
- */
-@Serializable
-data class SkillInvocationRequest(
-    @SerialName("run_id") val runId: String,
-    @SerialName("step_id") val stepId: String,
-    @SerialName("skill_id") val skillId: String,
-    val input: Map<String, String> = emptyMap(),
-    @SerialName("correlation_id") val correlationId: String = "",
-)
-
-/**
- * Result of a skill invocation.
- *
- * @property status Outcome of the invocation.
- * @property output Key-value output data from the skill.
- * @property error Error message if the invocation failed.
- * @property metrics Performance metrics for the invocation.
- */
-@Serializable
-data class SkillInvocationResult(
-    val status: StepResultStatus,
-    val output: Map<String, String> = emptyMap(),
-    val error: String? = null,
-    val metrics: ExecutionMetrics = ExecutionMetrics(),
-)
-
-// --- Run States (Section 9) ---
+// --- Run States ---
 
 /**
  * The lifecycle states of a workflow run.
@@ -244,8 +168,6 @@ data class SkillInvocationResult(
  * ```
  * CREATED -> LOADING_DEFINITION -> READY -> EXECUTING -> COMPLETED
  *                                              |
- *                                              +-> WAITING_ON_TOOL
- *                                              +-> WAITING_ON_SKILL
  *                                              +-> WAITING_FOR_APPROVAL
  *                                              +-> WAITING_FOR_EXTERNAL_EVENT
  *                                              +-> FAILED
@@ -262,10 +184,6 @@ enum class RunState {
     READY,
     /** The run is actively executing steps. */
     EXECUTING,
-    /** The run is paused waiting for a tool invocation to complete. */
-    WAITING_ON_TOOL,
-    /** The run is paused waiting for a skill invocation to complete. */
-    WAITING_ON_SKILL,
     /** The run is paused at an approval checkpoint awaiting human decision. */
     WAITING_FOR_APPROVAL,
     /** The run is paused waiting for an external event. */

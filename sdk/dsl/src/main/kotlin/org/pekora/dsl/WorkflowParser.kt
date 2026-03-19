@@ -38,8 +38,6 @@ import org.yaml.snakeyaml.Yaml
  *   inputs: <schema>         # optional
  *   outputs: <schema>        # optional
  *   agents: [<agent>]        # optional
- *   tools: [<tool>]          # optional
- *   skills: [<skill>]        # optional
  *   policies: [<policy>]     # optional
  *   steps: [<step>]          # required
  * ```
@@ -77,8 +75,6 @@ object WorkflowParser {
         val outputs = (wf["outputs"] as? Map<*, *>)?.let { parseSchema(it) }
 
         val agents = (wf["agents"] as? List<*>)?.map { parseAgent(it as Map<*, *>) } ?: emptyList()
-        val tools = (wf["tools"] as? List<*>)?.map { parseToolRef(it as Map<*, *>) } ?: emptyList()
-        val skills = (wf["skills"] as? List<*>)?.map { parseSkillRef(it as Map<*, *>) } ?: emptyList()
         val policies = (wf["policies"] as? List<*>)?.map { parsePolicyRef(it as Map<*, *>) } ?: emptyList()
         val steps = (wf["steps"] as? List<*>)?.map { parseStep(it as Map<*, *>) }
             ?: throw IllegalArgumentException("workflow.steps is required")
@@ -90,8 +86,6 @@ object WorkflowParser {
             inputs = inputs,
             outputs = outputs,
             agents = agents,
-            tools = tools,
-            skills = skills,
             policies = policies,
             steps = steps,
         )
@@ -145,36 +139,6 @@ object WorkflowParser {
     }
 
     /**
-     * Parses a tool reference from a YAML map.
-     *
-     * @throws IllegalArgumentException if `tool.id` is missing.
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun parseToolRef(map: Map<*, *>): ToolReference {
-        return ToolReference(
-            id = map["id"] as? String ?: throw IllegalArgumentException("tool.id is required"),
-            adapter = map["adapter"] as? String ?: "native",
-            config = (map["config"] as? Map<*, *>)?.entries?.associate { (k, v) -> k.toString() to v.toString() }
-                ?: emptyMap(),
-        )
-    }
-
-    /**
-     * Parses a skill reference from a YAML map.
-     *
-     * @throws IllegalArgumentException if `skill.id` is missing.
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun parseSkillRef(map: Map<*, *>): SkillReference {
-        return SkillReference(
-            id = map["id"] as? String ?: throw IllegalArgumentException("skill.id is required"),
-            adapter = map["adapter"] as? String ?: "native",
-            config = (map["config"] as? Map<*, *>)?.entries?.associate { (k, v) -> k.toString() to v.toString() }
-                ?: emptyMap(),
-        )
-    }
-
-    /**
      * Parses a policy reference from a YAML map, including optional inline policy definition.
      */
     @Suppress("UNCHECKED_CAST")
@@ -194,8 +158,6 @@ object WorkflowParser {
             id = map["id"] as? String ?: "",
             allowedBackends = (map["allowed_backends"] as? List<*>)?.map { it.toString() } ?: emptyList(),
             allowedModels = (map["allowed_models"] as? List<*>)?.map { it.toString() } ?: emptyList(),
-            allowedTools = (map["allowed_tools"] as? List<*>)?.map { it.toString() } ?: emptyList(),
-            allowedSkills = (map["allowed_skills"] as? List<*>)?.map { it.toString() } ?: emptyList(),
             maxTokens = (map["max_tokens"] as? Number)?.toLong(),
             timeoutSeconds = (map["timeout_seconds"] as? Number)?.toInt(),
             requireApproval = map["require_approval"] as? Boolean ?: false,
@@ -222,8 +184,6 @@ object WorkflowParser {
             id = map["id"] as? String ?: throw IllegalArgumentException("step.id is required"),
             type = type,
             agent = map["agent"] as? String,
-            tool = map["tool"] as? String,
-            skill = map["skill"] as? String,
             input = (map["input"] as? Map<*, *>)?.entries?.associate { (k, v) -> k.toString() to v.toString() }
                 ?: emptyMap(),
             output = (map["output"] as? Map<*, *>)?.entries?.associate { (k, v) -> k.toString() to v.toString() }
