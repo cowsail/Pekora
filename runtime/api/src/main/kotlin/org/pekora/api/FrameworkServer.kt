@@ -1,0 +1,172 @@
+/**
+ * Bootstrap and main entry point for the Pekko Agent Workflow Framework server.
+ *
+ * This file contains the [FrameworkServer] object which initializes the entire runtime:
+ * actor system, cluster sharding, child actors, and the HTTP server. It serves as the
+ * composition root that wires all framework components together.
+ *
+ * **Bootstrap sequence:**
+ *
+ * 1. Spawn the [WorkflowRegistry][org.pekora.registry.WorkflowRegistry] actor for
+ *    template and version management.
+ * 2. Spawn the [ApprovalManager][org.pekora.engine.ApprovalManager] actor for
+ *    human-in-the-loop approval gates.
+ * 3. Create a [PolicyGuard][org.pekora.policy.PolicyGuard] instance and spawn the
+ *    [StepExecutor][org.pekora.engine.StepExecutor] actor for executing workflow steps.
+ * 4. Initialize [ClusterSharding] for [RunEntity][org.pekora.engine.RunEntity] so that
+ *    run instances are distributed across cluster nodes and persisted via event sourcing.
+ * 5. Build the HTTP route tree by composing [WorkflowRoutes] and [RunRoutes].
+ * 6. Bind the Pekko HTTP server to the configured host and port.
+ *
+ * @see FrameworkServer
+ * @see WorkflowRoutes
+ * @see RunRoutes
+ */
+package org.pekora.api
+
+import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.javadsl.Behaviors
+import org.apache.pekko.cluster.sharding.typed.javadsl.ClusterSharding
+import org.apache.pekko.cluster.sharding.typed.javadsl.Entity
+import org.apache.pekko.http.javadsl.Http
+import org.apache.pekko.http.javadsl.server.AllDirectives
+import org.apache.pekko.persistence.typed.PersistenceId
+import org.pekora.engine.*
+import org.pekora.registry.*
+import org.pekora.policy.PolicyGuard
+import org.slf4j.LoggerFactory
+
+/**
+ * Main server object that bootstraps the Pekko Agent Workflow Framework.
+ *
+ * [FrameworkServer] is a singleton that provides:
+ *
+ * - [create]: a factory method returning a Pekko [Behavior] that performs the full
+ *   bootstrap sequence (actor spawning, cluster sharding initialization, HTTP binding).
+ * - [main]: a JVM entry point that reads `HTTP_HOST` and `HTTP_PORT` from environment
+ *   variables and starts the actor system.
+ *
+ * The bootstrap sequence initializes the following actors as children of the root
+ * guardian:
+ *
+ * - **workflow-registry** -- [WorkflowRegistry][org.pekora.registry.WorkflowRegistry]
+ *   for template/version storage.
+ * - **approval-manager** -- [ApprovalManager][org.pekora.engine.ApprovalManager] for
+ *   managing pending approval gates.
+ * - **step-executor** -- [StepExecutor][org.pekora.engine.StepExecutor] for
+ *   dispatching step execution to LLM backends, tools, and skills.
+ *
+ * Cluster sharding is configured for [RunEntity][org.pekora.engine.RunEntity] using
+ * [RunEntityTypeKey], so each run is a sharded, event-sourced entity identified by its
+ * run ID. The [PersistenceId] is derived from the entity type key and entity ID.
+ *
+ * @see WorkflowRoutes
+ * @see RunRoutes
+ * @see org.pekora.engine.RunEntity
+ * @see org.pekora.registry.WorkflowRegistry
+ */
+object FrameworkServer {
+
+    private val logger = LoggerFactory.getLogger(FrameworkServer::class.java)
+
+    /**
+     * Creates the root [Behavior] that bootstraps the framework.
+     *
+     * When the returned behavior is materialized by an [ActorSystem], it:
+     *
+     * 1. Spawns the workflow registry, approval manager, and step executor actors.
+     * 2. Initializes cluster sharding for [RunEntity][org.pekora.engine.RunEntity].
+     * 3. Builds the HTTP route tree from [WorkflowRoutes] and [RunRoutes].
+     * 4. Binds the Pekko HTTP server to the given [host] and [port].
+     *
+     * If the HTTP bind fails, the actor system is terminated.
+     *
+     * @param host The network interface to bind to. Defaults to `"0.0.0.0"` (all interfaces).
+     * @param port The TCP port to listen on. Defaults to `8080`.
+     * @return A [Behavior] of type `Void` (no external messages) for use as the root guardian.
+     * @see main
+     */
+    fun create(
+        host: String = "0.0.0.0",
+        port: Int = 8080,
+    ): Behavior<Void> = Behaviors.setup { ctx ->
+        val system = ctx.system
+
+        // Initialize workflow registry
+        val registry = ctx.spawn(WorkflowRegistry.create(), "workflow-registry")
+        logger.info("WorkflowRegistry started")
+
+        // Initialize approval manager
+        val approvalManager = ctx.spawn(ApprovalManager.create(), "approval-manager")
+        logger.info("ApprovalManager started")
+
+        // Initialize step executor
+        val policyGuard = PolicyGuard()
+        val stepExecutor = ctx.spawn(
+            StepExecutor.create(policyGuard = policyGuard),
+            "step-executor",
+        )
+        logger.info("StepExecutor started")
+
+        // Initialize cluster sharding for RunEntity
+        val sharding = ClusterSharding.get(system)
+        sharding.init(
+            Entity.of(RunEntityTypeKey.typeKey) { entityContext ->
+                RunEntity.create(
+                    runId = entityContext.entityId,
+                    persistenceId = PersistenceId.of(
+                        entityContext.entityTypeKey.name(),
+                        entityContext.entityId,
+                    ),
+                    stepExecutor = stepExecutor,
+                    approvalManager = approvalManager,
+                )
+            }
+        )
+        logger.info("RunEntity cluster sharding initialized")
+
+        // Set up HTTP routes
+        val allDirectives = object : AllDirectives() {}
+        val workflowRoutes = WorkflowRoutes(registry, system)
+        val runRoutes = RunRoutes(sharding, registry, approvalManager, system)
+
+        val route = allDirectives.concat(
+            workflowRoutes.routes(),
+            runRoutes.routes(),
+        )
+
+        // Start HTTP server
+        Http.get(system).newServerAt(host, port).bind(route)
+            .whenComplete { binding, error ->
+                if (error != null) {
+                    logger.error("Failed to bind HTTP server", error)
+                    system.terminate()
+                } else {
+                    logger.info("HTTP server bound to ${binding.localAddress()}")
+                }
+            }
+
+        Behaviors.empty()
+    }
+
+    /**
+     * JVM entry point for the framework server.
+     *
+     * Reads configuration from environment variables:
+     * - `HTTP_HOST` -- the bind address (default: `"0.0.0.0"`).
+     * - `HTTP_PORT` -- the listen port (default: `8080`).
+     *
+     * Creates an [ActorSystem] named `"AgentFramework"` with the root behavior produced
+     * by [create].
+     *
+     * @param args Command-line arguments (currently unused).
+     * @see create
+     */
+    @JvmStatic
+    fun main(args: Array<String>) {
+        val host = System.getenv("HTTP_HOST") ?: "0.0.0.0"
+        val port = System.getenv("HTTP_PORT")?.toIntOrNull() ?: 8080
+        ActorSystem.create(create(host, port), "AgentFramework")
+    }
+}

@@ -1,0 +1,139 @@
+workflow:
+  name: issue-to-pr
+  version: 1
+  description: "End-to-end workflow: classify issue, plan work, implement, test, review, approve, and create PR"
+
+  inputs:
+    type: object
+    required: [repo, issue_id]
+    properties:
+      repo:
+        type: string
+        description: "Repository in org/repo format"
+      issue_id:
+        type: string
+        description: "GitHub issue number"
+
+  agents:
+    - id: classifier
+      backend: langgraph
+      model_profile: classification-default
+      description: "Classifies the issue type and priority"
+
+    - id: planner
+      backend: langgraph
+      model_profile: planning-default
+      description: "Creates implementation plan from issue"
+
+    - id: coder
+      backend: openclaw-skill
+      model_profile: coding-default
+      description: "Implements code changes based on plan"
+
+    - id: reviewer
+      backend: langgraph
+      model_profile: review-default
+      description: "Reviews code changes"
+
+  tools:
+    - id: github-read
+      adapter: openclaw-tools
+
+    - id: github-write
+      adapter: openclaw-tools
+
+    - id: test-runner
+      adapter: openclaw-tools
+
+  policies:
+    - id: default-policy
+      inline:
+        allowed_backends: [langgraph, openclaw-skill]
+        allowed_tools: [github-read, github-write, test-runner]
+        timeout_seconds: 600
+        max_tokens: 100000
+
+  steps:
+    - id: classify
+      type: agent
+      agent: classifier
+      description: "Classify the issue type and extract key information"
+      input:
+        repo: "${inputs.repo}"
+        issue_id: "${inputs.issue_id}"
+      retries:
+        max_attempts: 3
+        backoff_ms: 2000
+      next: plan
+
+    - id: plan
+      type: agent
+      agent: planner
+      description: "Create implementation plan"
+      input:
+        repo: "${inputs.repo}"
+        issue_id: "${inputs.issue_id}"
+        classification: "${steps.classify.output}"
+      retries:
+        max_attempts: 2
+        backoff_ms: 5000
+      next: implement
+
+    - id: implement
+      type: agent
+      agent: coder
+      description: "Implement code changes based on plan"
+      input:
+        repo: "${inputs.repo}"
+        plan: "${steps.plan.output}"
+      timeout: 1200
+      next: test
+
+    - id: test
+      type: tool
+      tool: test-runner
+      description: "Run test suite against implementation"
+      input:
+        repo: "${inputs.repo}"
+        branch: "${steps.implement.output.branch}"
+      retries:
+        max_attempts: 2
+        backoff_ms: 10000
+      next: review
+
+    - id: review
+      type: agent
+      agent: reviewer
+      description: "Review code changes"
+      input:
+        plan: "${steps.plan.output}"
+        implementation: "${steps.implement.output}"
+        test_results: "${steps.test.output}"
+      next: approve
+
+    - id: approve
+      type: approval
+      description: "Human approval required before creating PR"
+      approvers: [team-lead, tech-lead]
+      timeout: 86400
+      next: create-pr
+
+    - id: create-pr
+      type: tool
+      tool: github-write
+      description: "Create pull request"
+      input:
+        repo: "${inputs.repo}"
+        branch: "${steps.implement.output.branch}"
+        title: "${steps.plan.output.pr_title}"
+        body: "${steps.plan.output.pr_body}"
+      next: done
+
+    - id: done
+      type: result
+      description: "Workflow complete"
+      output:
+        classification: "${steps.classify.output}"
+        plan: "${steps.plan.output}"
+        pr_url: "${steps.create-pr.output.pr_url}"
+        test_results: "${steps.test.output}"
