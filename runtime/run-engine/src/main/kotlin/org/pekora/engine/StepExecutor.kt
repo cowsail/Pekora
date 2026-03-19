@@ -56,10 +56,16 @@ sealed interface StepExecutorMessage
  * @property request The fully resolved [StepExecutionRequest] containing step kind, backend,
  *                   input parameters, and execution constraints.
  * @property replyTo The [RunEntity] actor reference to receive the [StepResult] upon completion.
+ * @property stepDefinition The [StepDefinition] for policy enforcement. Null skips policy check.
+ * @property agents Map of agent id to [AgentDefinition] for policy backend resolution.
+ * @property stepPolicies Inline policies from the workflow definition to evaluate.
  */
 data class ExecuteStep(
     val request: StepExecutionRequest,
     val replyTo: ActorRef<RunCommand>,
+    val stepDefinition: StepDefinition? = null,
+    val agents: Map<String, AgentDefinition> = emptyMap(),
+    val stepPolicies: List<PolicyDefinition> = emptyList(),
 ) : StepExecutorMessage
 
 /**
@@ -120,6 +126,21 @@ class StepExecutor(
     private fun onExecuteStep(msg: ExecuteStep): Behavior<StepExecutorMessage> {
         val request = msg.request
         logger.info("Executing step ${request.stepId} (kind=${request.stepKind}, backend=${request.backend})")
+
+        // Policy enforcement before dispatch
+        if (msg.stepDefinition != null) {
+            val decision = policyGuard.evaluate(msg.stepDefinition, msg.agents, msg.stepPolicies)
+            if (!decision.allowed) {
+                val violations = decision.violations.joinToString("; ")
+                logger.warn("Step ${request.stepId} blocked by policy: $violations")
+                val failResult = StepExecutionResult(
+                    status = StepResultStatus.FAILED,
+                    error = "Policy violation: $violations",
+                )
+                msg.replyTo.tell(StepResult(request.stepId, failResult))
+                return this
+            }
+        }
 
         context.pipeToSelf(
             executeAsync(request)

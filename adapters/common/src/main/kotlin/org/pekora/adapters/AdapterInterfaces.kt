@@ -26,7 +26,7 @@
  * ```
  *
  * @see org.pekora.adapters.langgraph.LangGraphAdapter
- * @see org.pekora.adapters.openclaw.OpenClawAdapter
+ * @see org.pekora.adapters.a2a.A2AAdapter
  * @see org.pekora.adapters.generic.GenericAdapter
  */
 package org.pekora.adapters
@@ -35,6 +35,26 @@ import org.pekora.dsl.StepExecutionRequest
 import org.pekora.dsl.StepExecutionResult
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
+
+/**
+ * Health status of an adapter backend.
+ */
+enum class HealthStatus { HEALTHY, UNHEALTHY, UNKNOWN }
+
+/**
+ * Health report returned by [AgentRuntimeAdapter.healthCheck].
+ *
+ * @property backendId The adapter's [AgentRuntimeAdapter.backendId].
+ * @property status Overall health status.
+ * @property message Optional detail message (e.g., error description).
+ * @property latencyMs Round-trip latency in milliseconds, or 0 if unknown.
+ */
+data class AdapterHealth(
+    val backendId: String,
+    val status: HealthStatus,
+    val message: String = "",
+    val latencyMs: Long = 0,
+)
 
 /**
  * Adapter for executing workflow steps in an external agent runtime.
@@ -94,6 +114,18 @@ interface AgentRuntimeAdapter {
      */
     fun validateDefinition(definition: Map<String, String>): CompletionStage<ValidationResult> {
         return CompletableFuture.completedFuture(ValidationResult(valid = true))
+    }
+
+    /**
+     * Performs a lightweight health check against the backend.
+     *
+     * Default implementation returns [HealthStatus.UNKNOWN]. Override to probe the real
+     * backend endpoint and return [HealthStatus.HEALTHY] or [HealthStatus.UNHEALTHY].
+     *
+     * @return A [CompletionStage] with the current [AdapterHealth].
+     */
+    fun healthCheck(): CompletionStage<AdapterHealth> {
+        return CompletableFuture.completedFuture(AdapterHealth(backendId, HealthStatus.UNKNOWN))
     }
 }
 

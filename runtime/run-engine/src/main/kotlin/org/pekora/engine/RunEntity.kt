@@ -393,7 +393,14 @@ class RunEntity private constructor(
                         timeoutSeconds = step.timeout ?: 300,
                     ),
                 )
-                stepExecutor.tell(ExecuteStep(request, ctx.self))
+                val workflowPolicies = definition.policies.mapNotNull { it.inline }
+                stepExecutor.tell(ExecuteStep(
+                    request = request,
+                    replyTo = ctx.self,
+                    stepDefinition = step,
+                    agents = agents,
+                    stepPolicies = workflowPolicies,
+                ))
             }
         }
     }
