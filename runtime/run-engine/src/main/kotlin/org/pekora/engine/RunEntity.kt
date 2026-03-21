@@ -260,7 +260,9 @@ class RunEntity private constructor(
                     retryable = false,
                 )
                 val runFailEvent = RunFailed(runId = runId, error = "Step ${cmd.stepId} failed: ${cmd.result.error}")
-                Effect().persist(listOf(failEvent, runFailEvent)).thenRun { _: RunState -> }
+                Effect().persist(listOf(failEvent, runFailEvent)).thenRun { _: RunState ->
+                    stepExecutor.tell(RunTerminated(runId))
+                }
             }
         }
     }
@@ -285,6 +287,7 @@ class RunEntity private constructor(
         val event = RunCancelled(runId = runId, reason = cmd.reason)
         return Effect().persist(event).thenRun { _: RunState ->
             cmd.replyTo.tell(RunCommandResponse(true, "Run cancelled"))
+            stepExecutor.tell(RunTerminated(runId))
         }
     }
 
@@ -332,7 +335,9 @@ class RunEntity private constructor(
 
     private fun onCompleteRunInternal(state: RunState, cmd: CompleteRunInternal): Effect<RunEvent, RunState> {
         val event = RunCompleted(runId = runId, output = cmd.outputs)
-        return Effect().persist(event).thenRun { _: RunState -> }
+        return Effect().persist(event).thenRun { _: RunState ->
+            stepExecutor.tell(RunTerminated(runId))
+        }
     }
 
     // --- Workflow Advancement ---

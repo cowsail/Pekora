@@ -1,8 +1,23 @@
 /**
  * Factory that constructs [AgentRuntimeAdapter] instances from HOCON configuration.
  *
- * Reads the `pekora.adapters` config block, creates only enabled adapters, and returns
- * a map keyed by backend identifier for use in [FrameworkServer].
+ * Reads the `pekora.adapters.instances` config block and creates one adapter per named entry.
+ * The entry key becomes the adapter's [backendId] and the value referenced in workflow YAML
+ * `agents[].backend` fields. Multiple instances of the same adapter type (e.g., two LangGraph
+ * servers with different endpoints) are declared as separate named entries:
+ *
+ * ```hocon
+ * pekora.adapters.instances {
+ *   langgraph-prod    { type = langgraph, enabled = true, service-url = "...", api-key = "..." }
+ *   langgraph-staging { type = langgraph, enabled = true, service-url = "...", api-key = "..." }
+ *   my-a2a            { type = a2a,       enabled = true, service-url = "..." }
+ * }
+ * ```
+ *
+ * Supported types: `langgraph`, `a2a`, `bedrock-agentcore`, `generic`.
+ *
+ * The native adapter is always included when calling the three-argument overload and
+ * `pekora.adapters.native.enabled` is `true` (default).
  *
  * @see AgentRuntimeAdapter
  * @see FrameworkServer
@@ -25,9 +40,8 @@ object AdapterFactory {
     private val logger = LoggerFactory.getLogger(AdapterFactory::class.java)
 
     /**
-     * Reads `pekora.adapters` from [config] and constructs enabled adapters.
-     *
-     * Includes the [NativeAdapter] if `pekora.adapters.native.enabled = true`.
+     * Reads `pekora.adapters` from [config] and constructs enabled adapters, including
+     * the [NativeAdapter] backed by [nativeAgents].
      *
      * @param config The root Pekko/Pekora config loaded at startup.
      * @param system The actor system — required to spawn native agent actors.
@@ -42,8 +56,8 @@ object AdapterFactory {
         val result = createAdapters(config).toMutableMap()
         val adaptersConfig = if (config.hasPath("pekora.adapters")) config.getConfig("pekora.adapters") else null
         val nativeEnabled = adaptersConfig?.let {
-            it.hasPath("native") && it.getBoolean("native.enabled")
-        } ?: true  // enabled by default when this overload is used
+            !it.hasPath("native.enabled") || it.getBoolean("native.enabled")
+        } ?: true
 
         if (nativeEnabled) {
             val adapter = NativeAdapter(nativeAgents, system)
@@ -54,10 +68,12 @@ object AdapterFactory {
     }
 
     /**
-     * Reads `pekora.adapters` from [config] and constructs enabled adapters (without native adapter).
+     * Reads `pekora.adapters.instances` from [config] and constructs enabled adapters.
+     *
+     * Does not include the native adapter — use the three-argument overload for that.
      *
      * @param config The root Pekko/Pekora config loaded at startup.
-     * @return Map of backend identifier to adapter instance.
+     * @return Map of instance name to adapter instance.
      */
     fun createAdapters(config: Config): Map<String, AgentRuntimeAdapter> {
         val adaptersConfig = if (config.hasPath("pekora.adapters")) {
@@ -67,58 +83,69 @@ object AdapterFactory {
             return defaultAdapters()
         }
 
+        if (!adaptersConfig.hasPath("instances")) {
+            logger.warn("No pekora.adapters.instances config found; using default adapter configurations")
+            return defaultAdapters()
+        }
+
+        val instancesConfig = adaptersConfig.getConfig("instances")
         val result = mutableMapOf<String, AgentRuntimeAdapter>()
 
-        if (adaptersConfig.hasPath("langgraph") && adaptersConfig.getBoolean("langgraph.enabled")) {
-            val cfg = adaptersConfig.getConfig("langgraph")
-            val adapter = LangGraphAdapter(
-                serviceUrl = cfg.getString("service-url"),
-                apiKey = cfg.getString("api-key"),
-            )
-            result[adapter.backendId] = adapter
-            logger.info("LangGraph adapter enabled (url=${cfg.getString("service-url")})")
-        }
+        for (instanceName in instancesConfig.root().keys) {
+            val cfg = instancesConfig.getConfig(instanceName)
 
-        if (adaptersConfig.hasPath("a2a") && adaptersConfig.getBoolean("a2a.enabled")) {
-            val cfg = adaptersConfig.getConfig("a2a")
-            val adapter = A2AAdapter(
-                serviceUrl = cfg.getString("service-url"),
-                apiKey = cfg.getString("api-key"),
-            )
-            result[adapter.backendId] = adapter
-            logger.info("A2A adapter enabled (url=${cfg.getString("service-url")})")
-        }
+            if (cfg.hasPath("enabled") && !cfg.getBoolean("enabled")) {
+                logger.debug("Adapter instance '{}' is disabled — skipping", instanceName)
+                continue
+            }
 
-        if (adaptersConfig.hasPath("bedrock-agentcore") && adaptersConfig.getBoolean("bedrock-agentcore.enabled")) {
-            val cfg = adaptersConfig.getConfig("bedrock-agentcore")
-            val adapter = BedrockAgentCoreAdapter(
-                agentRuntimeArn = cfg.getString("agent-runtime-arn"),
-                region = cfg.getString("region"),
-                authMode = cfg.getString("auth-mode"),
-                oauthToken = cfg.getString("oauth-token"),
-            )
-            result[adapter.backendId] = adapter
-            logger.info("BedrockAgentCore adapter enabled (region=${cfg.getString("region")}, auth=${cfg.getString("auth-mode")})")
-        }
+            val adapterType = if (cfg.hasPath("type")) cfg.getString("type") else {
+                logger.warn("Adapter instance '{}' missing 'type' field — skipping", instanceName)
+                continue
+            }
 
-        if (adaptersConfig.hasPath("generic") && adaptersConfig.getBoolean("generic.enabled")) {
-            val cfg = adaptersConfig.getConfig("generic")
-            val adapter = GenericAdapter.http(
-                backendId = "generic",
-                baseUrl = cfg.getString("service-url"),
-                apiKey = cfg.getString("api-key"),
-            )
-            result[adapter.backendId] = adapter
-            logger.info("Generic adapter enabled (url=${cfg.getString("service-url")})")
+            val adapter: AgentRuntimeAdapter? = when (adapterType) {
+                "langgraph" -> LangGraphAdapter(
+                    backendId = instanceName,
+                    serviceUrl = cfg.getString("service-url"),
+                    apiKey = cfg.getString("api-key"),
+                )
+                "a2a" -> A2AAdapter(
+                    backendId = instanceName,
+                    serviceUrl = cfg.getString("service-url"),
+                    apiKey = cfg.getString("api-key"),
+                )
+                "bedrock-agentcore" -> BedrockAgentCoreAdapter(
+                    backendId = instanceName,
+                    agentRuntimeArn = cfg.getString("agent-runtime-arn"),
+                    region = cfg.getString("region"),
+                    authMode = cfg.getString("auth-mode"),
+                    oauthToken = cfg.getString("oauth-token"),
+                )
+                "generic" -> GenericAdapter.http(
+                    backendId = instanceName,
+                    baseUrl = cfg.getString("service-url"),
+                    apiKey = cfg.getString("api-key"),
+                )
+                else -> {
+                    logger.warn("Unknown adapter type '{}' for instance '{}' — skipping", adapterType, instanceName)
+                    null
+                }
+            }
+
+            if (adapter != null) {
+                result[instanceName] = adapter
+                logger.info("Adapter instance '{}' enabled (type={})", instanceName, adapterType)
+            }
         }
 
         return result
     }
 
     private fun defaultAdapters(): Map<String, AgentRuntimeAdapter> = mapOf(
-        "langgraph" to LangGraphAdapter(),
-        "a2a" to A2AAdapter(),
-        "bedrock-agentcore" to BedrockAgentCoreAdapter(),
-        "generic" to GenericAdapter.http("generic", "http://localhost:8400"),
+        "langgraph-default" to LangGraphAdapter(backendId = "langgraph-default"),
+        "a2a-default" to A2AAdapter(backendId = "a2a-default"),
+        "bedrock-default" to BedrockAgentCoreAdapter(backendId = "bedrock-default"),
+        "generic-default" to GenericAdapter.http("generic-default", "http://localhost:8400"),
     )
 }

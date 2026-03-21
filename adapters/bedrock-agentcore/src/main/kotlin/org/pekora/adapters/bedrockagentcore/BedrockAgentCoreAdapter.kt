@@ -51,6 +51,7 @@ import java.util.concurrent.CompletionStage
  * @property httpClient JDK HTTP client used for all outbound requests.
  */
 class BedrockAgentCoreAdapter(
+    override val backendId: String = "bedrock-agentcore",
     private val agentRuntimeArn: String = "",
     private val region: String = "us-east-1",
     private val authMode: String = "oauth",
@@ -58,8 +59,6 @@ class BedrockAgentCoreAdapter(
     private val httpClient: HttpClient = HttpClient.newHttpClient(),
     internal val endpointOverride: String? = null,
 ) : AgentRuntimeAdapter {
-
-    override val backendId = "bedrock-agentcore"
 
     companion object {
         private val logger = LoggerFactory.getLogger(BedrockAgentCoreAdapter::class.java)
