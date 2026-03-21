@@ -21,6 +21,7 @@ dependencies {
     implementation(project(":adapters:a2a"))
     implementation(project(":adapters:bedrock-agentcore"))
     implementation(project(":adapters:generic"))
+    implementation(project(":adapters:native"))
     implementation("org.apache.pekko:pekko-actor-typed_3:$pekkoVersion")
     implementation("org.apache.pekko:pekko-cluster-typed_3:$pekkoVersion")
     implementation("org.apache.pekko:pekko-cluster-sharding-typed_3:$pekkoVersion")

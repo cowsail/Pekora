@@ -11,6 +11,7 @@ include(
     "adapters:generic",
     "adapters:bedrock-agentcore",
     "adapters:a2a",
+    "adapters:native",
     "sdk:dsl",
     "sdk:client",
 )

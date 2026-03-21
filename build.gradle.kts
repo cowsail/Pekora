@@ -13,6 +13,7 @@ dependencies {
     dokka(project(":adapters:generic"))
     dokka(project(":adapters:bedrock-agentcore"))
     dokka(project(":adapters:a2a"))
+    dokka(project(":adapters:native"))
     dokka(project(":runtime:run-engine"))
     dokka(project(":runtime:workflow-registry"))
     dokka(project(":runtime:policy"))

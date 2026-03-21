@@ -1,0 +1,49 @@
+# Native Pekko Agent Example
+#
+# This workflow demonstrates a step dispatched to an agent that runs natively
+# inside the Pekko actor system — no HTTP call, no external service.
+#
+# To run this example, register your agent before starting the server:
+#
+#   FrameworkServer.nativeAgents.register(
+#       "echo",
+#       PekoraAgentBehavior.create(::EchoAgent)
+#   )
+#   FrameworkServer.main(emptyArray())
+#
+# You can mix native agents with external backends in the same workflow:
+#
+#   agents:
+#     - id: classifier
+#       backend: langgraph    # remote LangGraph service
+#     - id: echo
+#       backend: native       # in-process Pekko actor
+#
+workflow:
+  name: native-echo
+  version: 1
+  description: >
+    Demonstrates a native Pekko agent step. The echo agent reflects
+    its input back as output — useful as a template for building
+    real in-process agents.
+
+inputs:
+  - message
+
+agents:
+  - id: echo
+    backend: native
+    description: "In-process echo agent — returns input as output"
+
+steps:
+  - id: echo-step
+    type: agent
+    agent: echo
+    input:
+      message: "${inputs.message}"
+    next: done
+
+  - id: done
+    type: result
+    output:
+      echoed: "${steps.echo-step.output.message}"
