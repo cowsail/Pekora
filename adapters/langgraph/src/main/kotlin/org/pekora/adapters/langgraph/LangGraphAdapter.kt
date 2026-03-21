@@ -41,12 +41,11 @@ import java.util.concurrent.TimeUnit
  * @property httpClient JDK HTTP client used for all outbound requests.
  */
 class LangGraphAdapter(
+    override val backendId: String = "langgraph",
     private val serviceUrl: String = "http://localhost:8123",
     private val apiKey: String = "",
     private val httpClient: HttpClient = HttpClient.newHttpClient(),
 ) : AgentRuntimeAdapter {
-
-    override val backendId = "langgraph"
 
     companion object {
         private val logger = LoggerFactory.getLogger(LangGraphAdapter::class.java)

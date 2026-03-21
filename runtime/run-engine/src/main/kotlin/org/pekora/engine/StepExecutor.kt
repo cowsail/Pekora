@@ -37,6 +37,7 @@ import org.apache.pekko.actor.typed.javadsl.ActorContext
 import org.apache.pekko.actor.typed.javadsl.Behaviors
 import org.apache.pekko.actor.typed.javadsl.Receive
 import org.pekora.adapters.AgentRuntimeAdapter
+import org.pekora.adapters.CleanableAdapter
 import org.pekora.dsl.*
 import org.pekora.policy.PolicyGuard
 import org.slf4j.LoggerFactory
@@ -67,6 +68,16 @@ data class ExecuteStep(
     val agents: Map<String, AgentDefinition> = emptyMap(),
     val stepPolicies: List<PolicyDefinition> = emptyList(),
 ) : StepExecutorMessage
+
+/**
+ * Signals that a workflow run has reached a terminal state (completed, failed, or cancelled).
+ *
+ * [StepExecutor] uses this to trigger [CleanableAdapter.cleanupRun] on all registered adapters
+ * that maintain per-run state. Sent by [RunEntity] when any terminal event is persisted.
+ *
+ * @property runId The run that has terminated.
+ */
+data class RunTerminated(val runId: String) : StepExecutorMessage
 
 /**
  * Message requesting execution of a terminal RESULT step.
@@ -121,6 +132,7 @@ class StepExecutor(
         newReceiveBuilder()
             .onMessage(ExecuteStep::class.java, this::onExecuteStep)
             .onMessage(ExecuteResultStep::class.java, this::onExecuteResultStep)
+            .onMessage(RunTerminated::class.java, this::onRunTerminated)
             .build()
 
     private fun onExecuteStep(msg: ExecuteStep): Behavior<StepExecutorMessage> {
@@ -166,6 +178,12 @@ class StepExecutor(
             output = msg.output,
         )
         msg.replyTo.tell(StepResult(msg.stepId, result))
+        return this
+    }
+
+    private fun onRunTerminated(msg: RunTerminated): Behavior<StepExecutorMessage> {
+        logger.debug("Run '{}' terminated — triggering adapter cleanup", msg.runId)
+        agentAdapters.values.filterIsInstance<CleanableAdapter>().forEach { it.cleanupRun(msg.runId) }
         return this
     }
 

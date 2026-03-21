@@ -184,6 +184,25 @@ data class WorkspaceHandle(
 )
 
 /**
+ * Adapter that can release resources associated with a completed workflow run.
+ *
+ * Implement this interface alongside [AgentRuntimeAdapter] when an adapter maintains
+ * per-run state (e.g., PER_RUN Pekko actor instances) that should be released when the
+ * run reaches a terminal state. The framework will call [cleanupRun] automatically.
+ */
+interface CleanableAdapter {
+    /**
+     * Releases all per-run resources associated with [runId].
+     *
+     * Called by the framework when a run completes, fails, or is cancelled.
+     * Implementations must be idempotent and safe to call on unknown run IDs.
+     *
+     * @param runId The run whose resources should be released.
+     */
+    fun cleanupRun(runId: String)
+}
+
+/**
  * Result of validating a definition against an adapter.
  *
  * @property valid Whether the definition is compatible with the adapter.

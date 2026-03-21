@@ -39,12 +39,11 @@ import java.util.concurrent.CompletionStage
  * @property httpClient JDK HTTP client used for all outbound requests.
  */
 class A2AAdapter(
+    override val backendId: String = "a2a",
     private val serviceUrl: String = "http://localhost:8200",
     private val apiKey: String = "",
     private val httpClient: HttpClient = HttpClient.newHttpClient(),
 ) : AgentRuntimeAdapter {
-
-    override val backendId = "a2a"
 
     companion object {
         private val logger = LoggerFactory.getLogger(A2AAdapter::class.java)
