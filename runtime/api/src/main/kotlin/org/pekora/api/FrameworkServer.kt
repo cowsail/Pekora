@@ -34,6 +34,7 @@ import org.apache.pekko.cluster.sharding.typed.javadsl.Entity
 import org.apache.pekko.http.javadsl.Http
 import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.persistence.typed.PersistenceId
+import org.pekora.adapters.native.NativeAgentRegistry
 import org.pekora.engine.*
 import org.pekora.registry.*
 import org.pekora.policy.PolicyGuard
@@ -74,6 +75,22 @@ object FrameworkServer {
     private val logger = LoggerFactory.getLogger(FrameworkServer::class.java)
 
     /**
+     * Registry for native Pekko agent behaviors.
+     *
+     * Register agent behaviors here before the server starts (or at any time — actors
+     * are spawned lazily on first dispatch):
+     *
+     * ```kotlin
+     * FrameworkServer.nativeAgents.register("summarizer", PekoraAgentBehavior.create(::SummarizerAgent))
+     * FrameworkServer.main(emptyArray())
+     * ```
+     *
+     * Agents registered here are accessible in workflow YAML as `backend: native`.
+     * The agent `id` in the YAML must match the name passed to [NativeAgentRegistry.register].
+     */
+    val nativeAgents: NativeAgentRegistry = NativeAgentRegistry()
+
+    /**
      * Creates the root [Behavior] that bootstraps the framework.
      *
      * When the returned behavior is materialized by an [ActorSystem], it:
@@ -105,8 +122,8 @@ object FrameworkServer {
         val approvalManager = ctx.spawn(ApprovalManager.create(), "approval-manager")
         logger.info("ApprovalManager started")
 
-        // Initialize adapters from HOCON config
-        val agentAdapters = AdapterFactory.createAdapters(system.settings().config())
+        // Initialize adapters from HOCON config (includes native adapter)
+        val agentAdapters = AdapterFactory.createAdapters(system.settings().config(), system, nativeAgents)
 
         // Initialize step executor with agent adapters and policy guard
         val policyGuard = PolicyGuard()

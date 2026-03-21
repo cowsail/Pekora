@@ -10,11 +10,14 @@
 package org.pekora.api
 
 import com.typesafe.config.Config
+import org.apache.pekko.actor.typed.ActorSystem
 import org.pekora.adapters.AgentRuntimeAdapter
 import org.pekora.adapters.a2a.A2AAdapter
 import org.pekora.adapters.bedrockagentcore.BedrockAgentCoreAdapter
 import org.pekora.adapters.generic.GenericAdapter
 import org.pekora.adapters.langgraph.LangGraphAdapter
+import org.pekora.adapters.native.NativeAdapter
+import org.pekora.adapters.native.NativeAgentRegistry
 import org.slf4j.LoggerFactory
 
 object AdapterFactory {
@@ -23,6 +26,35 @@ object AdapterFactory {
 
     /**
      * Reads `pekora.adapters` from [config] and constructs enabled adapters.
+     *
+     * Includes the [NativeAdapter] if `pekora.adapters.native.enabled = true`.
+     *
+     * @param config The root Pekko/Pekora config loaded at startup.
+     * @param system The actor system — required to spawn native agent actors.
+     * @param nativeAgents The registry of native Pekko agent behaviors.
+     * @return Map of backend identifier to adapter instance.
+     */
+    fun createAdapters(
+        config: Config,
+        system: ActorSystem<*>,
+        nativeAgents: NativeAgentRegistry,
+    ): Map<String, AgentRuntimeAdapter> {
+        val result = createAdapters(config).toMutableMap()
+        val adaptersConfig = if (config.hasPath("pekora.adapters")) config.getConfig("pekora.adapters") else null
+        val nativeEnabled = adaptersConfig?.let {
+            it.hasPath("native") && it.getBoolean("native.enabled")
+        } ?: true  // enabled by default when this overload is used
+
+        if (nativeEnabled) {
+            val adapter = NativeAdapter(nativeAgents, system)
+            result[adapter.backendId] = adapter
+            logger.info("Native adapter enabled (registered agents: ${nativeAgents.registeredNames()})")
+        }
+        return result
+    }
+
+    /**
+     * Reads `pekora.adapters` from [config] and constructs enabled adapters (without native adapter).
      *
      * @param config The root Pekko/Pekora config loaded at startup.
      * @return Map of backend identifier to adapter instance.
