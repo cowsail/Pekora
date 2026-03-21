@@ -357,7 +357,8 @@ class RunEntity private constructor(
         val nextStepId = completedStep.next
         if (nextStepId == null) {
             if (completedStep.type == StepKind.RESULT) {
-                ctx.self.tell(CompleteRunInternal(state.outputs.toMap()))
+                val resultOutput = state.stepOutputs[completedStepId] ?: emptyMap()
+                ctx.self.tell(CompleteRunInternal(resultOutput))
             }
             return
         }
