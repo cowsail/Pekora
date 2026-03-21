@@ -9,8 +9,8 @@ include(
     "adapters:common",
     "adapters:langgraph",
     "adapters:generic",
-    "adapters:strands",
-    "adapters:openclaw",
+    "adapters:bedrock-agentcore",
+    "adapters:a2a",
     "sdk:dsl",
     "sdk:client",
 )

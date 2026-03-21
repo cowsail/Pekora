@@ -1,5 +1,5 @@
 /**
- * Bootstrap and main entry point for the Pekko Agent Workflow Framework server.
+ * Bootstrap and main entry point for the Pekora Agent Workflow Framework server.
  *
  * This file contains the [FrameworkServer] object which initializes the entire runtime:
  * actor system, cluster sharding, child actors, and the HTTP server. It serves as the
@@ -11,16 +11,18 @@
  *    template and version management.
  * 2. Spawn the [ApprovalManager][org.pekora.engine.ApprovalManager] actor for
  *    human-in-the-loop approval gates.
- * 3. Create a [PolicyGuard][org.pekora.policy.PolicyGuard] instance and spawn the
+ * 3. Use [AdapterFactory] to read HOCON config and construct enabled [AgentRuntimeAdapter] instances.
+ * 4. Create a [PolicyGuard][org.pekora.policy.PolicyGuard] instance and spawn the
  *    [StepExecutor][org.pekora.engine.StepExecutor] actor for executing workflow steps.
- * 4. Initialize [ClusterSharding] for [RunEntity][org.pekora.engine.RunEntity] so that
+ * 5. Initialize [ClusterSharding] for [RunEntity][org.pekora.engine.RunEntity] so that
  *    run instances are distributed across cluster nodes and persisted via event sourcing.
- * 5. Build the HTTP route tree by composing [WorkflowRoutes] and [RunRoutes].
- * 6. Bind the Pekko HTTP server to the configured host and port.
+ * 6. Build the HTTP route tree by composing [WorkflowRoutes], [RunRoutes], and [HealthRoutes].
+ * 7. Bind the Pekko HTTP server to the configured host and port.
  *
  * @see FrameworkServer
  * @see WorkflowRoutes
  * @see RunRoutes
+ * @see HealthRoutes
  */
 package org.pekora.api
 
@@ -32,21 +34,17 @@ import org.apache.pekko.cluster.sharding.typed.javadsl.Entity
 import org.apache.pekko.http.javadsl.Http
 import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.persistence.typed.PersistenceId
-import org.pekora.adapters.generic.GenericAdapter
-import org.pekora.adapters.langgraph.LangGraphAdapter
-import org.pekora.adapters.openclaw.OpenClawAdapter
-import org.pekora.adapters.strands.StrandsAdapter
 import org.pekora.engine.*
 import org.pekora.registry.*
 import org.pekora.policy.PolicyGuard
 import org.slf4j.LoggerFactory
 
 /**
- * Main server object that bootstraps the Pekko Agent Workflow Framework.
+ * Main server object that bootstraps the Pekora Agent Workflow Framework.
  *
  * [FrameworkServer] is a singleton that provides:
  *
- * - [create]: a factory method returning a Pekko [Behavior] that performs the full
+ * - [create]: a factory method returning a Pekka [Behavior] that performs the full
  *   bootstrap sequence (actor spawning, cluster sharding initialization, HTTP binding).
  * - [main]: a JVM entry point that reads `HTTP_HOST` and `HTTP_PORT` from environment
  *   variables and starts the actor system.
@@ -59,7 +57,7 @@ import org.slf4j.LoggerFactory
  * - **approval-manager** -- [ApprovalManager][org.pekora.engine.ApprovalManager] for
  *   managing pending approval gates.
  * - **step-executor** -- [StepExecutor][org.pekora.engine.StepExecutor] for
- *   dispatching step execution to LLM backends, tools, and skills.
+ *   dispatching step execution to agent backends.
  *
  * Cluster sharding is configured for [RunEntity][org.pekora.engine.RunEntity] using
  * [RunEntityTypeKey], so each run is a sharded, event-sourced entity identified by its
@@ -67,6 +65,7 @@ import org.slf4j.LoggerFactory
  *
  * @see WorkflowRoutes
  * @see RunRoutes
+ * @see HealthRoutes
  * @see org.pekora.engine.RunEntity
  * @see org.pekora.registry.WorkflowRegistry
  */
@@ -80,9 +79,10 @@ object FrameworkServer {
      * When the returned behavior is materialized by an [ActorSystem], it:
      *
      * 1. Spawns the workflow registry, approval manager, and step executor actors.
-     * 2. Initializes cluster sharding for [RunEntity][org.pekora.engine.RunEntity].
-     * 3. Builds the HTTP route tree from [WorkflowRoutes] and [RunRoutes].
-     * 4. Binds the Pekko HTTP server to the given [host] and [port].
+     * 2. Uses [AdapterFactory] to initialize only enabled adapters from HOCON config.
+     * 3. Initializes cluster sharding for [RunEntity][org.pekora.engine.RunEntity].
+     * 4. Builds the HTTP route tree from [WorkflowRoutes], [RunRoutes], and [HealthRoutes].
+     * 5. Binds the Pekora HTTP server to the given [host] and [port].
      *
      * If the HTTP bind fails, the actor system is terminated.
      *
@@ -105,14 +105,11 @@ object FrameworkServer {
         val approvalManager = ctx.spawn(ApprovalManager.create(), "approval-manager")
         logger.info("ApprovalManager started")
 
-        // Initialize step executor with agent adapters
+        // Initialize adapters from HOCON config
+        val agentAdapters = AdapterFactory.createAdapters(system.settings().config())
+
+        // Initialize step executor with agent adapters and policy guard
         val policyGuard = PolicyGuard()
-        val agentAdapters = mapOf(
-            "langgraph" to LangGraphAdapter(),
-            "openclaw" to OpenClawAdapter(),
-            "strands" to StrandsAdapter(),
-            "generic" to GenericAdapter.http("generic", "http://localhost:8400"),
-        )
         val stepExecutor = ctx.spawn(
             StepExecutor.create(agentAdapters = agentAdapters, policyGuard = policyGuard),
             "step-executor",
@@ -140,10 +137,12 @@ object FrameworkServer {
         val allDirectives = object : AllDirectives() {}
         val workflowRoutes = WorkflowRoutes(registry, system)
         val runRoutes = RunRoutes(sharding, registry, approvalManager, system)
+        val healthRoutes = HealthRoutes(agentAdapters, system)
 
         val route = allDirectives.concat(
             workflowRoutes.routes(),
             runRoutes.routes(),
+            healthRoutes.routes(),
         )
 
         // Start HTTP server

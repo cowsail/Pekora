@@ -26,7 +26,7 @@ import kotlinx.serialization.Serializable
  * @property runId The unique identifier of the parent run.
  * @property stepId The unique identifier of the step within the workflow.
  * @property stepKind The type of step being executed.
- * @property backend The adapter backend to use for execution (e.g., `"langgraph"`, `"openclaw-tools"`).
+ * @property backend The adapter backend to use for execution (e.g., `"langgraph"`, `"a2a"`, `"bedrock-agentcore"`).
  * @property definitionRef Reference to the external definition (e.g., agent ID, tool ID, graph name).
  * @property input Resolved input parameters for the step.
  * @property context Additional contextual data passed to the adapter.

@@ -1,5 +1,5 @@
 /**
- * Generic adapter for the Pekka Agent Workflow Framework.
+ * Generic adapter for the Pekora Agent Workflow Framework.
  *
  * Provides two execution modes:
  * - **HTTP mode**: POSTs a [StepExecutionRequest] to a configurable base URL endpoint.
@@ -13,7 +13,9 @@ package org.pekora.adapters.generic
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.actor.typed.javadsl.AskPattern
+import org.pekora.adapters.AdapterHealth
 import org.pekora.adapters.AgentRuntimeAdapter
+import org.pekora.adapters.HealthStatus
 import org.pekora.dsl.StepExecutionRequest
 import org.pekora.dsl.StepExecutionResult
 import org.pekora.dsl.StepResultStatus
@@ -23,6 +25,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -63,10 +66,12 @@ class GenericAdapter private constructor(
          * HTTP mode: serialise the request and POST to [baseUrl]/execute.
          *
          * @property baseUrl Base URL of the remote agent service.
+         * @property apiKey Optional API key sent as `Authorization: Bearer` header.
          * @property httpClient HTTP client to use for outbound requests.
          */
         data class Http(
             val baseUrl: String,
+            val apiKey: String = "",
             val httpClient: HttpClient = HttpClient.newHttpClient(),
         ) : Mode
 
@@ -93,15 +98,17 @@ class GenericAdapter private constructor(
         /**
          * Creates a [GenericAdapter] that dispatches via HTTP.
          *
-         * @param backendId The backend identifier (e.g., `"generic-http"`).
+         * @param backendId The backend identifier (e.g., `"generic"`).
          * @param baseUrl Base URL of the remote agent service.
+         * @param apiKey Optional API key for Bearer auth.
          * @param httpClient Optional custom HTTP client.
          */
         fun http(
             backendId: String,
             baseUrl: String,
+            apiKey: String = "",
             httpClient: HttpClient = HttpClient.newHttpClient(),
-        ): GenericAdapter = GenericAdapter(backendId, Mode.Http(baseUrl, httpClient))
+        ): GenericAdapter = GenericAdapter(backendId, Mode.Http(baseUrl, apiKey, httpClient))
 
         /**
          * Creates a [GenericAdapter] that dispatches to a Pekko actor.
@@ -128,6 +135,34 @@ class GenericAdapter private constructor(
         }
     }
 
+    override fun healthCheck(): CompletionStage<AdapterHealth> {
+        return when (val m = mode) {
+            is Mode.Http -> {
+                val start = System.currentTimeMillis()
+                val req = HttpRequest.newBuilder()
+                    .uri(URI.create("${m.baseUrl}/health"))
+                    .timeout(Duration.ofSeconds(3))
+                    .GET()
+                    .apply { if (m.apiKey.isNotEmpty()) header("Authorization", "Bearer ${m.apiKey}") }
+                    .build()
+                m.httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
+                    .thenApply { response ->
+                        val latency = System.currentTimeMillis() - start
+                        if (response.statusCode() in 200..299) {
+                            AdapterHealth(backendId, HealthStatus.HEALTHY, latencyMs = latency)
+                        } else {
+                            AdapterHealth(backendId, HealthStatus.UNHEALTHY, "HTTP ${response.statusCode()}", latency)
+                        }
+                    }
+                    .exceptionally { ex ->
+                        AdapterHealth(backendId, HealthStatus.UNHEALTHY, ex.message ?: "connection failed")
+                    }
+            }
+            is Mode.Actor ->
+                CompletableFuture.completedFuture(AdapterHealth(backendId, HealthStatus.HEALTHY, "actor mode"))
+        }
+    }
+
     private fun executeHttp(request: StepExecutionRequest, mode: Mode.Http): CompletionStage<StepExecutionResult> {
         logger.info("GenericAdapter HTTP executing step: ${request.stepId} (backend=$backendId)")
 
@@ -136,6 +171,7 @@ class GenericAdapter private constructor(
         val httpRequest = HttpRequest.newBuilder()
             .uri(URI.create("${mode.baseUrl}/execute"))
             .header("Content-Type", "application/json")
+            .apply { if (mode.apiKey.isNotEmpty()) header("Authorization", "Bearer ${mode.apiKey}") }
             .POST(HttpRequest.BodyPublishers.ofString(payload))
             .build()
 
