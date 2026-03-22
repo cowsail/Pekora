@@ -193,6 +193,7 @@ object WorkflowParser {
             parallel = (map["parallel"] as? List<*>)?.map { it.toString() } ?: emptyList(),
             joinNext = map["join_next"] as? String,
             subworkflow = map["subworkflow"] as? String,
+            subworkflowVersion = (map["subworkflow_version"] as? Number)?.toInt(),
             approvers = (map["approvers"] as? List<*>)?.map { it.toString() } ?: emptyList(),
             timeout = (map["timeout"] as? Number)?.toInt(),
             retries = (map["retries"] as? Map<*, *>)?.let { parseRetryConfig(it) },

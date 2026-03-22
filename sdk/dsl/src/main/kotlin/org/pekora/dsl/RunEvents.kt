@@ -136,6 +136,49 @@ data class StepCompleted(
     override val timestamp: Long = System.currentTimeMillis(),
 ) : RunEvent
 
+@Serializable
+data class ParallelGroupStarted(
+    override val runId: String,
+    val parallelStepId: String,
+    val branches: List<String>,
+    val joinStepId: String,
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
+@Serializable
+data class ParallelBranchCompleted(
+    override val runId: String,
+    val parallelStepId: String,
+    val branchRootStepId: String,
+    val branchOutput: Map<String, String> = emptyMap(),
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
+@Serializable
+data class ParallelBranchFailed(
+    override val runId: String,
+    val parallelStepId: String,
+    val branchRootStepId: String,
+    val error: String,
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
+@Serializable
+data class ParallelGroupCompleted(
+    override val runId: String,
+    val parallelStepId: String,
+    val output: Map<String, String> = emptyMap(),
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
+@Serializable
+data class ParallelGroupFailed(
+    override val runId: String,
+    val parallelStepId: String,
+    val error: String,
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
 /**
  * Emitted when a step fails.
  *
@@ -152,6 +195,34 @@ data class StepFailed(
     val stepId: String,
     val error: String,
     val retryable: Boolean = true,
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
+@Serializable
+data class SubworkflowChildStarted(
+    override val runId: String,
+    val stepId: String,
+    val childRunId: String,
+    val templateId: String,
+    val versionNumber: Int,
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
+@Serializable
+data class SubworkflowChildCompleted(
+    override val runId: String,
+    val stepId: String,
+    val childRunId: String,
+    val output: Map<String, String> = emptyMap(),
+    override val timestamp: Long = System.currentTimeMillis(),
+) : RunEvent
+
+@Serializable
+data class SubworkflowChildFailed(
+    override val runId: String,
+    val stepId: String,
+    val childRunId: String,
+    val error: String,
     override val timestamp: Long = System.currentTimeMillis(),
 ) : RunEvent
 

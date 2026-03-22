@@ -214,5 +214,7 @@ data class RunStatusResponse(
     val stepStates: Map<String, StepState>,
     val outputs: Map<String, String>,
     val stepToolCalls: Map<String, List<ToolCallRecord>> = emptyMap(),
+    val parallelGroups: Map<String, ParallelGroupState> = emptyMap(),
+    val subworkflowChildren: Map<String, SubworkflowChildState> = emptyMap(),
     val error: String? = null,
 )
