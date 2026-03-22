@@ -1,6 +1,6 @@
-# Pekko Agent Workflow Framework
+# Pekora Agent Workflow Framework
 
-A distributed, durable workflow framework for AI agents where Pekko owns workflow execution and external runtimes like LangGraph and OpenClaw plug in behind stable adapter contracts.
+A distributed, durable workflow framework for AI agents where Pekko owns workflow execution and external runtimes like LangGraph, A2A agents, and Bedrock AgentCore plug in behind stable adapter contracts.
 
 ## What It Is
 
@@ -35,8 +35,10 @@ A Pekko-based runtime and framework that turns AI agent workflows into:
                                ┌───────────▼───────────────┐
                                │     Adapter Plane          │
                                │  LangGraphAdapter          │
-                               │  OpenClawToolAdapter       │
-                               │  OpenClawSkillAdapter      │
+                               │  A2AAdapter                │
+                               │  BedrockAgentCoreAdapter   │
+                               │  NativeAdapter             │
+                               │  GenericAdapter            │
                                └───────────────────────────┘
                                            │
                                ┌───────────▼───────────────┐
@@ -49,15 +51,17 @@ A Pekko-based runtime and framework that turns AI agent workflows into:
 ## Project Structure
 
 ```
-pekko-agent-framework/
+pekora/
 ├── sdk/
 │   ├── dsl/              # Domain models, run events, YAML parser
 │   └── client/           # HTTP client SDK
 ├── adapters/
-│   ├── common/           # Adapter interfaces (AgentRuntimeAdapter, ToolAdapter, SkillAdapter)
+│   ├── common/           # Adapter interface (AgentRuntimeAdapter)
 │   ├── langgraph/        # LangGraph remote execution adapter
-│   ├── openclaw-tools/   # OpenClaw tool invocation adapter
-│   └── openclaw-skills/  # OpenClaw skill invocation adapter
+│   ├── a2a/              # A2A protocol adapter
+│   ├── bedrock-agentcore/# Amazon Bedrock AgentCore adapter
+│   ├── native/           # In-process native agent adapter
+│   └── generic/          # Generic HTTP or in-process actor adapter
 ├── runtime/
 │   ├── run-engine/       # RunEntity, StepExecutor, ApprovalManager
 │   ├── workflow-registry/# WorkflowRegistry actor
@@ -141,7 +145,7 @@ workflow:
       model_profile: planning-default
 
     - id: coder
-      backend: openclaw-skill
+      backend: a2a-default
       model_profile: coding-default
 
   steps:
@@ -170,9 +174,7 @@ workflow:
 
 | Type | Description |
 |------|-------------|
-| `agent` | Execute via an agent runtime adapter (LangGraph, OpenClaw, etc.) |
-| `tool` | Invoke a tool through a ToolAdapter |
-| `skill` | Invoke a skill through a SkillAdapter |
+| `agent` | Execute via an agent runtime adapter (LangGraph, A2A, Bedrock AgentCore, native, etc.) |
 | `decision` | Branch based on conditions |
 | `approval` | Pause for human approval |
 | `parallel` | Execute steps concurrently (Phase 4) |
@@ -204,7 +206,6 @@ policies:
   - id: strict-policy
     inline:
       allowed_backends: [langgraph]
-      allowed_tools: [github-read]
       timeout_seconds: 300
       max_tokens: 50000
       require_approval: true
@@ -218,7 +219,7 @@ The event-sourced persistent actor that owns a single workflow run. Keyed by `ru
 ### Run States
 `Created` → `LoadingDefinition` → `Ready` → `Executing` → `Completed` / `Failed` / `Cancelled`
 
-Intermediate states: `WaitingOnTool`, `WaitingOnSkill`, `WaitingForApproval`, `WaitingForExternalEvent`
+Intermediate states: `WaitingForApproval`, `WaitingForExternalEvent`
 
 ### Event Sourcing
 Every run persists a full event journal:
@@ -230,16 +231,24 @@ Every run persists a full event journal:
 This provides replayable history, audit trails, deterministic recovery, and clear timelines.
 
 ### Adapters
-External runtimes plug in through adapter interfaces:
+External runtimes plug in through a single adapter contract:
 
-- **AgentRuntimeAdapter** — executes a step in LangGraph, Strands, etc.
-- **ToolAdapter** — invokes a tool (OpenClaw tools, custom tools)
-- **SkillAdapter** — invokes a skill (OpenClaw skills, custom skills)
-- **WorkspaceAdapter** — manages workspace lifecycle (repo checkout, sandbox)
+- **AgentRuntimeAdapter** — `executeStep(StepExecutionRequest): CompletionStage<StepExecutionResult>`
+
+Five implementations are provided:
+- `LangGraphAdapter` — remote LangGraph (Python) service via HTTP
+- `A2AAdapter` — generic A2A JSON-RPC protocol adapter
+- `BedrockAgentCoreAdapter` — Amazon Bedrock AgentCore runtime adapter
+- `NativeAdapter` — in-process Pekko actor/per-invocation agent adapter
+- `GenericAdapter` — configurable HTTP or in-process actor mode
+
+Tools and skills are the agent runtime's concern — Pekora does not mediate tool calls. Agent runtimes may optionally report tool calls in `StepExecutionResult.toolCalls` (as `ToolCallRecord`) for audit purposes.
+
+- **WorkspaceAdapter** — manages workspace lifecycle (repo checkout, sandbox) — future use
 
 ### PolicyGuard
 Evaluates whether a step or call is allowed based on:
-- Allowed backends, models, tools, skills
+- Allowed backends, allowed models
 - Cost budgets and timeout ceilings
 - Side-effect classifications (`read_only`, `write_scoped`, `external_side_effect`, `high_risk`)
 - Approval requirements
@@ -280,7 +289,7 @@ client.approve("approval_xyz", approver = "team-lead")
 
 See [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md) for the full phased implementation plan:
 
-- **Phase 2**: OpenClaw integration (wire to real services, permission mapping)
+- **Phase 2**: Adapter integration (wire adapters to real services, permission mapping)
 - **Phase 3**: LangGraph integration (Python service, event streaming, schema validation)
 - **Phase 4**: Parallelism and subworkflows (fan-out/fan-in, nested runs)
 - **Phase 5**: Hardening (snapshots, database projections, conformance tests)

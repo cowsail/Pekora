@@ -22,3 +22,6 @@ out/
 
 # OS
 Thumbs.db
+
+# Local assistant context
+CLAUDE.md
