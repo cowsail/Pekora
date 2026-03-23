@@ -68,6 +68,8 @@ sealed interface StepExecutorMessage
 data class ExecuteStep(
     val request: StepExecutionRequest,
     val replyTo: ActorRef<RunCommand>,
+    val attempt: Int = 1,
+    val maxAttempts: Int = 1,
     val stepDefinition: StepDefinition? = null,
     val agents: Map<String, AgentDefinition> = emptyMap(),
     val stepPolicies: List<PolicyDefinition> = emptyList(),
@@ -172,6 +174,8 @@ class StepExecutor(
             stepDispatchGateway.dispatch(
                 StepDispatchRequest(
                     request = request,
+                    attempt = msg.attempt,
+                    maxAttempts = msg.maxAttempts,
                     stepDefinition = msg.stepDefinition,
                     agents = msg.agents,
                     stepPolicies = msg.stepPolicies,

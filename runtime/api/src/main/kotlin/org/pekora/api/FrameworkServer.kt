@@ -26,6 +26,7 @@
  */
 package org.pekora.api
 
+import com.typesafe.config.Config
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.javadsl.Behaviors
@@ -36,10 +37,18 @@ import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.persistence.typed.PersistenceId
 import org.pekora.adapters.native.NativeAgentRegistry
 import org.pekora.dispatch.core.InlineStepDispatchGateway
+import org.pekora.dispatch.core.QueueStepDispatchGateway
+import org.pekora.dispatch.core.StepDispatchGateway
+import org.pekora.dispatch.core.WorkQueueProvider
+import org.pekora.dispatch.pekko.PekkoWorkQueueProvider
 import org.pekora.engine.*
 import org.pekora.policy.PolicyGuard
 import org.pekora.registry.*
+import org.pekora.worker.WorkerHost
+import org.pekora.worker.WorkerHostConfig
 import org.slf4j.LoggerFactory
+import java.time.Duration
+import java.util.UUID
 
 /**
  * Main server object that bootstraps the Pekora Agent Workflow Framework.
@@ -91,6 +100,70 @@ object FrameworkServer {
      */
     val nativeAgents: NativeAgentRegistry = NativeAgentRegistry()
 
+    private data class DistributedWorkersSettings(
+        val enabled: Boolean,
+        val provider: String,
+        val leaseTimeoutMs: Long,
+        val queueActorName: String,
+        val embeddedWorkerEnabled: Boolean,
+        val workerPollIntervalMs: Long,
+        val workerMaxClaimsPerPoll: Int,
+        val workerId: String,
+    ) {
+        companion object {
+            fun fromConfig(config: Config): DistributedWorkersSettings {
+                val rootPath = "pekora.distributedWorkers"
+                val enabled = config.hasPath("$rootPath.enabled") && config.getBoolean("$rootPath.enabled")
+                val provider = if (config.hasPath("$rootPath.provider")) {
+                    config.getString("$rootPath.provider")
+                } else {
+                    "inline"
+                }
+                val leaseTimeoutMs = if (config.hasPath("$rootPath.leaseTimeoutMs")) {
+                    config.getLong("$rootPath.leaseTimeoutMs")
+                } else {
+                    60_000L
+                }
+                val queueActorName = if (config.hasPath("$rootPath.queueActorName")) {
+                    config.getString("$rootPath.queueActorName")
+                } else {
+                    "work-queue"
+                }
+                val embeddedWorkerEnabled = if (config.hasPath("$rootPath.embeddedWorker.enabled")) {
+                    config.getBoolean("$rootPath.embeddedWorker.enabled")
+                } else {
+                    true
+                }
+                val workerPollIntervalMs = if (config.hasPath("$rootPath.embeddedWorker.pollIntervalMs")) {
+                    config.getLong("$rootPath.embeddedWorker.pollIntervalMs")
+                } else {
+                    250L
+                }
+                val workerMaxClaimsPerPoll = if (config.hasPath("$rootPath.embeddedWorker.maxClaimsPerPoll")) {
+                    config.getInt("$rootPath.embeddedWorker.maxClaimsPerPoll")
+                } else {
+                    8
+                }
+                val workerId = if (config.hasPath("$rootPath.embeddedWorker.workerId")) {
+                    config.getString("$rootPath.embeddedWorker.workerId")
+                } else {
+                    "embedded-worker-${UUID.randomUUID()}"
+                }
+
+                return DistributedWorkersSettings(
+                    enabled = enabled,
+                    provider = provider,
+                    leaseTimeoutMs = leaseTimeoutMs,
+                    queueActorName = queueActorName,
+                    embeddedWorkerEnabled = embeddedWorkerEnabled,
+                    workerPollIntervalMs = workerPollIntervalMs,
+                    workerMaxClaimsPerPoll = workerMaxClaimsPerPoll,
+                    workerId = workerId,
+                )
+            }
+        }
+    }
+
     /**
      * Creates the root [Behavior] that bootstraps the framework.
      *
@@ -126,9 +199,28 @@ object FrameworkServer {
         // Initialize adapters from HOCON config (includes native adapter)
         val agentAdapters = AdapterFactory.createAdapters(system.settings().config(), system, nativeAgents)
 
-        // Initialize step executor with agent adapters and policy guard
+        val distributedWorkers = DistributedWorkersSettings.fromConfig(system.settings().config())
+        val workQueueProvider: WorkQueueProvider? =
+            if (distributedWorkers.enabled && distributedWorkers.provider == "pekko") {
+                PekkoWorkQueueProvider.create(
+                    system = system,
+                    actorName = distributedWorkers.queueActorName,
+                )
+            } else {
+                null
+            }
+        val stepDispatchGateway: StepDispatchGateway =
+            if (workQueueProvider != null) {
+                QueueStepDispatchGateway(
+                    workQueueProvider = workQueueProvider,
+                    leaseTimeoutMs = distributedWorkers.leaseTimeoutMs,
+                )
+            } else {
+                InlineStepDispatchGateway()
+            }
+
+        // Initialize step executor with agent adapters, policy guard, and dispatch gateway
         val policyGuard = PolicyGuard()
-        val stepDispatchGateway = InlineStepDispatchGateway()
         val stepExecutor = ctx.spawn(
             StepExecutor.create(
                 agentAdapters = agentAdapters,
@@ -138,6 +230,12 @@ object FrameworkServer {
             "step-executor",
         )
         logger.info("StepExecutor started with adapters: ${agentAdapters.keys}")
+        logger.info(
+            "Distributed workers config: enabled={}, provider={}, embeddedWorker={}",
+            distributedWorkers.enabled,
+            distributedWorkers.provider,
+            distributedWorkers.embeddedWorkerEnabled,
+        )
 
         // Initialize cluster sharding for RunEntity
         val sharding = ClusterSharding.get(system)
@@ -157,6 +255,24 @@ object FrameworkServer {
             }
         )
         logger.info("RunEntity cluster sharding initialized")
+
+        if (workQueueProvider != null && distributedWorkers.embeddedWorkerEnabled) {
+            val workerConfig = WorkerHostConfig(
+                workerId = distributedWorkers.workerId,
+                pollInterval = Duration.ofMillis(distributedWorkers.workerPollIntervalMs),
+                maxClaimsPerPoll = distributedWorkers.workerMaxClaimsPerPoll,
+            )
+            ctx.spawn(
+                WorkerHost.create(
+                    config = workerConfig,
+                    workQueueProvider = workQueueProvider,
+                    agentAdapters = agentAdapters,
+                    sharding = sharding,
+                ),
+                "worker-host",
+            )
+            logger.info("Embedded worker started with id {}", workerConfig.workerId)
+        }
 
         // Set up HTTP routes
         val allDirectives = object : AllDirectives() {}

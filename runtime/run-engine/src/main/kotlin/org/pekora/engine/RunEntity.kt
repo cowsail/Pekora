@@ -605,10 +605,14 @@ class RunEntity private constructor(
                     ),
                 )
                 val workflowPolicies = definition.policies.mapNotNull { it.inline }
+                val attempt = state.stepAttempts[stepId] ?: 1
+                val maxAttempts = step.retries?.maxAttempts ?: 1
                 stepExecutor.tell(
                     ExecuteStep(
                         request = request,
                         replyTo = ctx.self,
+                        attempt = attempt,
+                        maxAttempts = maxAttempts,
                         stepDefinition = step,
                         agents = agents,
                         stepPolicies = workflowPolicies,

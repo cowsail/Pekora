@@ -1,17 +1,15 @@
 package org.pekora.dispatch.core
 
+import org.pekora.dsl.StepExecutionRequest
 import java.util.concurrent.CompletionStage
 
 data class WorkItem(
     val workItemId: String,
-    val runId: String,
-    val stepId: String,
     val attempt: Int,
-    val backend: String,
     val tenantId: String? = null,
     val capabilityTags: Set<String> = emptySet(),
-    val input: Map<String, String>,
     val policySnapshot: Map<String, String>? = null,
+    val request: StepExecutionRequest,
     val createdAtEpochMs: Long,
     val leaseTimeoutMs: Long,
     val maxAttempts: Int,

@@ -4,6 +4,8 @@ include(
     "runtime:api",
     "runtime:run-engine",
     "runtime:work-dispatch-core",
+    "runtime:work-dispatch-pekko",
+    "runtime:worker-runtime",
     "runtime:workflow-registry",
     "runtime:policy",
     "runtime:projection",
