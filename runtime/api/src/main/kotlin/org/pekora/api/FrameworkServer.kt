@@ -35,9 +35,10 @@ import org.apache.pekko.http.javadsl.Http
 import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.persistence.typed.PersistenceId
 import org.pekora.adapters.native.NativeAgentRegistry
+import org.pekora.dispatch.core.InlineStepDispatchGateway
 import org.pekora.engine.*
-import org.pekora.registry.*
 import org.pekora.policy.PolicyGuard
+import org.pekora.registry.*
 import org.slf4j.LoggerFactory
 
 /**
@@ -127,8 +128,13 @@ object FrameworkServer {
 
         // Initialize step executor with agent adapters and policy guard
         val policyGuard = PolicyGuard()
+        val stepDispatchGateway = InlineStepDispatchGateway()
         val stepExecutor = ctx.spawn(
-            StepExecutor.create(agentAdapters = agentAdapters, policyGuard = policyGuard),
+            StepExecutor.create(
+                agentAdapters = agentAdapters,
+                policyGuard = policyGuard,
+                stepDispatchGateway = stepDispatchGateway,
+            ),
             "step-executor",
         )
         logger.info("StepExecutor started with adapters: ${agentAdapters.keys}")

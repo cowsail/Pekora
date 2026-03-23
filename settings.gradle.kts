@@ -3,6 +3,7 @@ rootProject.name = "pekora"
 include(
     "runtime:api",
     "runtime:run-engine",
+    "runtime:work-dispatch-core",
     "runtime:workflow-registry",
     "runtime:policy",
     "runtime:projection",
