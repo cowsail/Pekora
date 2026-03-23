@@ -79,6 +79,10 @@ data class RunState(
     val stepToolCalls: MutableMap<String, List<ToolCallRecord>> = mutableMapOf(),
     val stepAttempts: MutableMap<String, Int> = mutableMapOf(),
     val pendingApprovals: MutableMap<String, String> = mutableMapOf(), // approvalId -> stepId
+    val activeSteps: MutableSet<String> = mutableSetOf(),
+    val parallelGroups: MutableMap<String, ParallelGroupState> = mutableMapOf(),
+    val branchToParallelRoot: MutableMap<String, String> = mutableMapOf(),
+    val subworkflowChildren: MutableMap<String, SubworkflowChildState> = mutableMapOf(),
     val tenantId: String = "",
     val correlationId: String = "",
     val error: String? = null,
@@ -153,23 +157,74 @@ data class RunState(
             is RunStarted -> newState.copy(status = RunStatus.EXECUTING)
             is StepScheduled -> {
                 newState.stepStates[event.stepId] = StepState.PENDING
+                newState.activeSteps.add(event.stepId)
                 newState
             }
             is StepStarted -> {
                 newState.stepStates[event.stepId] = StepState.RUNNING
                 newState.stepAttempts[event.stepId] = (newState.stepAttempts[event.stepId] ?: 0) + 1
+                newState.activeSteps.add(event.stepId)
                 newState
             }
             is StepCompleted -> {
                 newState.stepStates[event.stepId] = StepState.SUCCEEDED
                 newState.stepOutputs[event.stepId] = event.output
+                newState.activeSteps.remove(event.stepId)
                 if (event.toolCalls.isNotEmpty()) {
                     newState.stepToolCalls[event.stepId] = event.toolCalls
                 }
                 newState
             }
+            is ParallelGroupStarted -> {
+                newState.stepStates[event.parallelStepId] = StepState.RUNNING
+                newState.activeSteps.add(event.parallelStepId)
+                val group = ParallelGroupState(
+                    rootStepId = event.parallelStepId,
+                    joinStepId = event.joinStepId,
+                    branchRoots = event.branches.toMutableSet(),
+                    pendingBranches = event.branches.toMutableSet(),
+                    branchOutputs = mutableMapOf(),
+                    failedBranches = mutableMapOf(),
+                )
+                newState.parallelGroups[event.parallelStepId] = group
+                event.branches.forEach { branchRoot ->
+                    newState.branchToParallelRoot[branchRoot] = event.parallelStepId
+                }
+                newState
+            }
+            is ParallelBranchCompleted -> {
+                val group = newState.parallelGroups[event.parallelStepId]
+                if (group != null) {
+                    group.pendingBranches.remove(event.branchRootStepId)
+                    group.branchOutputs[event.branchRootStepId] = event.branchOutput
+                }
+                newState
+            }
+            is ParallelBranchFailed -> {
+                val group = newState.parallelGroups[event.parallelStepId]
+                if (group != null) {
+                    group.failedBranches[event.branchRootStepId] = event.error
+                }
+                newState
+            }
+            is ParallelGroupCompleted -> {
+                newState.stepStates[event.parallelStepId] = StepState.SUCCEEDED
+                newState.stepOutputs[event.parallelStepId] = event.output
+                newState.activeSteps.remove(event.parallelStepId)
+                val group = newState.parallelGroups.remove(event.parallelStepId)
+                group?.branchRoots?.forEach { newState.branchToParallelRoot.remove(it) }
+                newState
+            }
+            is ParallelGroupFailed -> {
+                newState.stepStates[event.parallelStepId] = StepState.FAILED
+                newState.activeSteps.remove(event.parallelStepId)
+                val group = newState.parallelGroups.remove(event.parallelStepId)
+                group?.branchRoots?.forEach { newState.branchToParallelRoot.remove(it) }
+                newState
+            }
             is StepFailed -> {
                 newState.stepStates[event.stepId] = StepState.FAILED
+                newState.activeSteps.remove(event.stepId)
                 newState
             }
             is StepRetryScheduled -> {
@@ -194,6 +249,39 @@ data class RunState(
             }
             is RunPaused -> newState.copy(status = RunStatus.WAITING_FOR_EXTERNAL_EVENT)
             is RunResumed -> newState.copy(status = RunStatus.EXECUTING)
+            is SubworkflowChildStarted -> {
+                newState.subworkflowChildren[event.stepId] = SubworkflowChildState(
+                    parentStepId = event.stepId,
+                    childRunId = event.childRunId,
+                    status = RunStatus.EXECUTING,
+                    output = emptyMap(),
+                    error = null,
+                )
+                newState.stepStates[event.stepId] = StepState.RUNNING
+                newState.activeSteps.add(event.stepId)
+                newState
+            }
+            is SubworkflowChildCompleted -> {
+                val existing = newState.subworkflowChildren[event.stepId]
+                if (existing != null) {
+                    newState.subworkflowChildren[event.stepId] = existing.copy(
+                        status = RunStatus.COMPLETED,
+                        output = event.output,
+                        error = null,
+                    )
+                }
+                newState
+            }
+            is SubworkflowChildFailed -> {
+                val existing = newState.subworkflowChildren[event.stepId]
+                if (existing != null) {
+                    newState.subworkflowChildren[event.stepId] = existing.copy(
+                        status = RunStatus.FAILED,
+                        error = event.error,
+                    )
+                }
+                newState
+            }
             is RunCompleted -> newState.copy(
                 status = RunStatus.COMPLETED,
                 outputs = event.output.toMutableMap(),
@@ -206,3 +294,20 @@ data class RunState(
         }
     }
 }
+
+data class ParallelGroupState(
+    val rootStepId: String,
+    val joinStepId: String,
+    val branchRoots: MutableSet<String>,
+    val pendingBranches: MutableSet<String>,
+    val branchOutputs: MutableMap<String, Map<String, String>>,
+    val failedBranches: MutableMap<String, String>,
+)
+
+data class SubworkflowChildState(
+    val parentStepId: String,
+    val childRunId: String,
+    val status: RunStatus,
+    val output: Map<String, String>,
+    val error: String?,
+)

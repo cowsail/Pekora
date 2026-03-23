@@ -179,11 +179,83 @@ class RunProjectionStore {
                         .computeIfAbsent(event.runId) { mutableMapOf() }[event.stepId] = event.toolCalls
                 }
             }
+            is ParallelGroupStarted -> {
+                updateSummary(event.runId) {
+                    it.copy(stepStates = it.stepStates + (event.parallelStepId to StepState.RUNNING))
+                }
+                addTimelineEntry(
+                    event.runId,
+                    event.timestamp,
+                    "ParallelGroupStarted",
+                    event.parallelStepId,
+                    "Branches: ${event.branches.joinToString(", ")}",
+                )
+            }
+            is ParallelBranchCompleted -> {
+                addTimelineEntry(
+                    event.runId,
+                    event.timestamp,
+                    "ParallelBranchCompleted",
+                    event.parallelStepId,
+                    "Branch root: ${event.branchRootStepId}",
+                )
+            }
+            is ParallelBranchFailed -> {
+                addTimelineEntry(
+                    event.runId,
+                    event.timestamp,
+                    "ParallelBranchFailed",
+                    event.parallelStepId,
+                    "Branch root: ${event.branchRootStepId}, error: ${event.error}",
+                )
+            }
+            is ParallelGroupCompleted -> {
+                updateSummary(event.runId) {
+                    it.copy(stepStates = it.stepStates + (event.parallelStepId to StepState.SUCCEEDED))
+                }
+                addTimelineEntry(event.runId, event.timestamp, "ParallelGroupCompleted", event.parallelStepId)
+            }
+            is ParallelGroupFailed -> {
+                updateSummary(event.runId) {
+                    it.copy(stepStates = it.stepStates + (event.parallelStepId to StepState.FAILED))
+                }
+                addTimelineEntry(event.runId, event.timestamp, "ParallelGroupFailed", event.parallelStepId, event.error)
+            }
             is StepFailed -> {
                 updateSummary(event.runId) {
                     it.copy(stepStates = it.stepStates + (event.stepId to StepState.FAILED))
                 }
                 addTimelineEntry(event.runId, event.timestamp, "StepFailed", event.stepId, event.error)
+            }
+            is SubworkflowChildStarted -> {
+                updateSummary(event.runId) {
+                    it.copy(stepStates = it.stepStates + (event.stepId to StepState.RUNNING))
+                }
+                addTimelineEntry(
+                    event.runId,
+                    event.timestamp,
+                    "SubworkflowChildStarted",
+                    event.stepId,
+                    "Child run: ${event.childRunId}",
+                )
+            }
+            is SubworkflowChildCompleted -> {
+                addTimelineEntry(
+                    event.runId,
+                    event.timestamp,
+                    "SubworkflowChildCompleted",
+                    event.stepId,
+                    "Child run: ${event.childRunId}",
+                )
+            }
+            is SubworkflowChildFailed -> {
+                addTimelineEntry(
+                    event.runId,
+                    event.timestamp,
+                    "SubworkflowChildFailed",
+                    event.stepId,
+                    "Child run: ${event.childRunId}, error: ${event.error}",
+                )
             }
             is ApprovalRequested -> {
                 updateSummary(event.runId) {

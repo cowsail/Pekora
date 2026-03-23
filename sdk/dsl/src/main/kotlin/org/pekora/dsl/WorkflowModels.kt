@@ -187,6 +187,7 @@ data class StepDefinition(
     val parallel: List<String> = emptyList(),
     @SerialName("join_next") val joinNext: String? = null,
     val subworkflow: String? = null,
+    @SerialName("subworkflow_version") val subworkflowVersion: Int? = null,
     val approvers: List<String> = emptyList(),
     val timeout: Int? = null,
     val retries: RetryConfig? = null,

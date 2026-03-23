@@ -145,6 +145,8 @@ object FrameworkServer {
                     ),
                     stepExecutor = stepExecutor,
                     approvalManager = approvalManager,
+                    registry = registry,
+                    sharding = sharding,
                 )
             }
         )
