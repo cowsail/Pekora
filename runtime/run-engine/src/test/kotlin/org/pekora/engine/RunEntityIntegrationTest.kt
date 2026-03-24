@@ -15,6 +15,7 @@ import java.time.Duration
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 class RunEntityIntegrationTest {
 
@@ -164,6 +165,87 @@ class RunEntityIntegrationTest {
             val parentStatus = awaitStatus(harness, parentEntity) { it.status == org.pekora.dsl.RunState.COMPLETED }
             assertEquals(org.pekora.dsl.RunState.COMPLETED, parentStatus.status)
             assertEquals(childRun2, parentStatus.subworkflowChildren["sw"]?.childRunId)
+        }
+    }
+
+    @Test
+    fun `stale step result from previous attempt is ignored after retry is scheduled`() {
+        withHarness { harness ->
+            val runId = "run-retry-${UUID.randomUUID()}"
+            val entity = harness.sharding.entityRefFor(RunEntityTypeKey.typeKey, runId)
+            val commandProbe = harness.testKit.createTestProbe<RunCommandResponse>()
+
+            val definition = WorkflowDefinition(
+                name = "retry-parent",
+                version = 1,
+                steps = listOf(
+                    StepDefinition(
+                        id = "agent",
+                        type = StepKind.AGENT,
+                        agent = "agent-1",
+                        retries = RetryConfig(maxAttempts = 2, backoffMs = 1, multiplier = 1.0),
+                        next = "done",
+                    ),
+                    StepDefinition(id = "done", type = StepKind.RESULT, output = mapOf("result" to "${'$'}{steps.agent.output.answer}")),
+                ),
+                agents = listOf(AgentDefinition(id = "agent-1", backend = "langgraph")),
+            )
+
+            createLoadStart(entity, commandProbe, definition)
+
+            val firstAttempt = harness.awaitStepExecutorMessage {
+                it is ExecuteStep && it.request.runId == runId && it.request.stepId == "agent"
+            } as ExecuteStep
+            assertEquals(1, firstAttempt.attempt)
+
+            entity.tell(
+                StepResult(
+                    stepId = "agent",
+                    attempt = 1,
+                    result = StepExecutionResult(status = StepResultStatus.FAILED, error = "boom"),
+                )
+            )
+
+            val secondAttempt = harness.awaitStepExecutorMessage {
+                it is ExecuteStep && it.request.runId == runId && it.request.stepId == "agent" && it.attempt == 2
+            } as ExecuteStep
+            assertEquals(2, secondAttempt.attempt)
+
+            entity.tell(
+                StepResult(
+                    stepId = "agent",
+                    attempt = 1,
+                    result = StepExecutionResult(status = StepResultStatus.SUCCEEDED, output = mapOf("answer" to "stale")),
+                )
+            )
+
+            val staleStatus = awaitStatus(harness, entity) { status ->
+                (status.stepStates["agent"] == StepState.RETRYING || status.stepStates["agent"] == StepState.PENDING) &&
+                    status.outputs["result"] == null
+            }
+            assertFalse(staleStatus.status == org.pekora.dsl.RunState.COMPLETED)
+
+            entity.tell(
+                StepResult(
+                    stepId = "agent",
+                    attempt = 2,
+                    result = StepExecutionResult(status = StepResultStatus.SUCCEEDED, output = mapOf("answer" to "fresh")),
+                )
+            )
+
+            val done = harness.awaitStepExecutorMessage {
+                it is ExecuteResultStep && it.runId == runId && it.stepId == "done"
+            } as ExecuteResultStep
+            entity.tell(
+                StepResult(
+                    stepId = done.stepId,
+                    attempt = done.attempt,
+                    result = StepExecutionResult(status = StepResultStatus.SUCCEEDED, output = mapOf("result" to "fresh")),
+                )
+            )
+
+            val finalStatus = awaitStatus(harness, entity) { it.status == org.pekora.dsl.RunState.COMPLETED }
+            assertEquals("fresh", finalStatus.outputs["result"])
         }
     }
 

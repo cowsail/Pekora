@@ -38,6 +38,10 @@ import org.apache.pekko.actor.typed.javadsl.Behaviors
 import org.apache.pekko.actor.typed.javadsl.Receive
 import org.pekora.adapters.AgentRuntimeAdapter
 import org.pekora.adapters.CleanableAdapter
+import org.pekora.dispatch.core.DispatchDecision
+import org.pekora.dispatch.core.InlineStepDispatchGateway
+import org.pekora.dispatch.core.StepDispatchGateway
+import org.pekora.dispatch.core.StepDispatchRequest
 import org.pekora.dsl.*
 import org.pekora.policy.PolicyGuard
 import org.slf4j.LoggerFactory
@@ -64,6 +68,8 @@ sealed interface StepExecutorMessage
 data class ExecuteStep(
     val request: StepExecutionRequest,
     val replyTo: ActorRef<RunCommand>,
+    val attempt: Int = 1,
+    val maxAttempts: Int = 1,
     val stepDefinition: StepDefinition? = null,
     val agents: Map<String, AgentDefinition> = emptyMap(),
     val stepPolicies: List<PolicyDefinition> = emptyList(),
@@ -93,8 +99,17 @@ data class RunTerminated(val runId: String) : StepExecutorMessage
 data class ExecuteResultStep(
     val runId: String,
     val stepId: String,
+    val attempt: Int = 1,
     val output: Map<String, String>,
     val replyTo: ActorRef<RunCommand>,
+) : StepExecutorMessage
+
+internal data class DispatchDecisionInternal(
+    val request: StepExecutionRequest,
+    val attempt: Int,
+    val replyTo: ActorRef<RunCommand>,
+    val decision: DispatchDecision? = null,
+    val throwable: Throwable? = null,
 ) : StepExecutorMessage
 
 /**
@@ -108,6 +123,7 @@ class StepExecutor(
     context: ActorContext<StepExecutorMessage>,
     private val agentAdapters: Map<String, AgentRuntimeAdapter>,
     private val policyGuard: PolicyGuard,
+    private val stepDispatchGateway: StepDispatchGateway,
 ) : AbstractBehavior<StepExecutorMessage>(context) {
 
     companion object {
@@ -123,8 +139,9 @@ class StepExecutor(
         fun create(
             agentAdapters: Map<String, AgentRuntimeAdapter> = emptyMap(),
             policyGuard: PolicyGuard = PolicyGuard(),
+            stepDispatchGateway: StepDispatchGateway = InlineStepDispatchGateway(),
         ): Behavior<StepExecutorMessage> = Behaviors.setup { ctx ->
-            StepExecutor(ctx, agentAdapters, policyGuard)
+            StepExecutor(ctx, agentAdapters, policyGuard, stepDispatchGateway)
         }
     }
 
@@ -132,6 +149,7 @@ class StepExecutor(
         newReceiveBuilder()
             .onMessage(ExecuteStep::class.java, this::onExecuteStep)
             .onMessage(ExecuteResultStep::class.java, this::onExecuteResultStep)
+            .onMessage(DispatchDecisionInternal::class.java, this::onDispatchDecision)
             .onMessage(RunTerminated::class.java, this::onRunTerminated)
             .build()
 
@@ -149,11 +167,85 @@ class StepExecutor(
                     status = StepResultStatus.FAILED,
                     error = "Policy violation: $violations",
                 )
-                msg.replyTo.tell(StepResult(request.stepId, failResult))
+                msg.replyTo.tell(StepResult(request.stepId, msg.attempt, failResult))
                 return this
             }
         }
 
+        context.pipeToSelf(
+            stepDispatchGateway.dispatch(
+                StepDispatchRequest(
+                    request = request,
+                    attempt = msg.attempt,
+                    maxAttempts = msg.maxAttempts,
+                    stepDefinition = msg.stepDefinition,
+                    agents = msg.agents,
+                    stepPolicies = msg.stepPolicies,
+                )
+            )
+        ) { decision, throwable ->
+            if (throwable != null) {
+                DispatchDecisionInternal(request, msg.attempt, msg.replyTo, throwable = throwable)
+            } else {
+                DispatchDecisionInternal(request, msg.attempt, msg.replyTo, decision = decision)
+            }
+        }
+
+        return this
+    }
+
+    private fun onDispatchDecision(msg: DispatchDecisionInternal): Behavior<StepExecutorMessage> {
+        val throwable = msg.throwable
+        if (throwable != null) {
+            logger.error("Step ${msg.request.stepId} dispatch failed", throwable)
+            val failResult = StepExecutionResult(
+                status = StepResultStatus.FAILED,
+                error = throwable.message ?: "Unknown error",
+            )
+            msg.replyTo.tell(StepResult(msg.request.stepId, msg.attempt, failResult))
+            return this
+        }
+
+        when (val decision = msg.decision) {
+            is DispatchDecision.ExecuteInline -> executeInline(decision.executionRequest, msg.attempt, msg.replyTo)
+            is DispatchDecision.Dispatched -> {
+                logger.info(
+                    "Queued step {} for distributed execution with work item {}",
+                    msg.request.stepId,
+                    decision.workItemId,
+                )
+            }
+            null -> {
+                val failResult = StepExecutionResult(
+                    status = StepResultStatus.FAILED,
+                    error = "Dispatch gateway returned no decision",
+                )
+                msg.replyTo.tell(StepResult(msg.request.stepId, msg.attempt, failResult))
+            }
+        }
+        return this
+    }
+
+    private fun onExecuteResultStep(msg: ExecuteResultStep): Behavior<StepExecutorMessage> {
+        val result = StepExecutionResult(
+            status = StepResultStatus.SUCCEEDED,
+            output = msg.output,
+        )
+        msg.replyTo.tell(StepResult(msg.stepId, msg.attempt, result))
+        return this
+    }
+
+    private fun onRunTerminated(msg: RunTerminated): Behavior<StepExecutorMessage> {
+        logger.debug("Run '{}' terminated — triggering adapter cleanup", msg.runId)
+        agentAdapters.values.filterIsInstance<CleanableAdapter>().forEach { it.cleanupRun(msg.runId) }
+        return this
+    }
+
+    private fun executeInline(
+        request: StepExecutionRequest,
+        attempt: Int,
+        replyTo: ActorRef<RunCommand>,
+    ) {
         context.pipeToSelf(
             executeAsync(request)
         ) { result, throwable ->
@@ -163,28 +255,11 @@ class StepExecutor(
                     status = StepResultStatus.FAILED,
                     error = throwable.message ?: "Unknown error",
                 )
-                StepResultInternal(request.stepId, failResult, msg.replyTo)
+                StepResultInternal(request.stepId, attempt, failResult, replyTo)
             } else {
-                StepResultInternal(request.stepId, result, msg.replyTo)
+                StepResultInternal(request.stepId, attempt, result, replyTo)
             }
         }
-
-        return this
-    }
-
-    private fun onExecuteResultStep(msg: ExecuteResultStep): Behavior<StepExecutorMessage> {
-        val result = StepExecutionResult(
-            status = StepResultStatus.SUCCEEDED,
-            output = msg.output,
-        )
-        msg.replyTo.tell(StepResult(msg.stepId, result))
-        return this
-    }
-
-    private fun onRunTerminated(msg: RunTerminated): Behavior<StepExecutorMessage> {
-        logger.debug("Run '{}' terminated — triggering adapter cleanup", msg.runId)
-        agentAdapters.values.filterIsInstance<CleanableAdapter>().forEach { it.cleanupRun(msg.runId) }
-        return this
     }
 
     private fun executeAsync(request: StepExecutionRequest): java.util.concurrent.CompletionStage<StepExecutionResult> {
@@ -216,10 +291,11 @@ class StepExecutor(
  */
 internal data class StepResultInternal(
     val stepId: String,
+    val attempt: Int,
     val result: StepExecutionResult,
     val replyTo: ActorRef<RunCommand>,
 ) : StepExecutorMessage {
     init {
-        replyTo.tell(StepResult(stepId, result))
+        replyTo.tell(StepResult(stepId, attempt, result))
     }
 }

@@ -36,8 +36,8 @@ import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.persistence.typed.PersistenceId
 import org.pekora.adapters.native.NativeAgentRegistry
 import org.pekora.engine.*
-import org.pekora.registry.*
 import org.pekora.policy.PolicyGuard
+import org.pekora.registry.*
 import org.slf4j.LoggerFactory
 
 /**
@@ -125,13 +125,26 @@ object FrameworkServer {
         // Initialize adapters from HOCON config (includes native adapter)
         val agentAdapters = AdapterFactory.createAdapters(system.settings().config(), system, nativeAgents)
 
-        // Initialize step executor with agent adapters and policy guard
+        val distributedWorkers = DistributedWorkersSettings.fromConfig(system.settings().config())
+        val workDispatch = WorkDispatchFactory.bootstrap(system, distributedWorkers)
+
+        // Initialize step executor with agent adapters, policy guard, and dispatch gateway
         val policyGuard = PolicyGuard()
         val stepExecutor = ctx.spawn(
-            StepExecutor.create(agentAdapters = agentAdapters, policyGuard = policyGuard),
+            StepExecutor.create(
+                agentAdapters = agentAdapters,
+                policyGuard = policyGuard,
+                stepDispatchGateway = workDispatch.stepDispatchGateway,
+            ),
             "step-executor",
         )
         logger.info("StepExecutor started with adapters: ${agentAdapters.keys}")
+        logger.info(
+            "Distributed workers config: enabled={}, provider={}, embeddedWorkers={}x",
+            distributedWorkers.enabled,
+            distributedWorkers.provider,
+            distributedWorkers.embeddedWorkers.replicas,
+        )
 
         // Initialize cluster sharding for RunEntity
         val sharding = ClusterSharding.get(system)
@@ -151,6 +164,14 @@ object FrameworkServer {
             }
         )
         logger.info("RunEntity cluster sharding initialized")
+
+        WorkDispatchFactory.spawnEmbeddedWorkers(
+            context = ctx,
+            settings = distributedWorkers,
+            workQueueProvider = workDispatch.workQueueProvider,
+            agentAdapters = agentAdapters,
+            sharding = sharding,
+        )
 
         // Set up HTTP routes
         val allDirectives = object : AllDirectives() {}

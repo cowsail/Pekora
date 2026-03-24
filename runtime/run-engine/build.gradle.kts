@@ -5,6 +5,7 @@ dependencies {
     implementation(project(":sdk:dsl"))
     implementation(project(":adapters:common"))
     implementation(project(":runtime:policy"))
+    implementation(project(":runtime:work-dispatch-core"))
     implementation(project(":runtime:workflow-registry"))
     implementation("org.apache.pekko:pekko-actor-typed_3:$pekkoVersion")
     implementation("org.apache.pekko:pekko-cluster-typed_3:$pekkoVersion")
