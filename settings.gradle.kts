@@ -2,6 +2,7 @@ rootProject.name = "pekora"
 
 include(
     "runtime:api",
+    "runtime:framework",
     "runtime:run-engine",
     "runtime:work-dispatch-core",
     "runtime:work-dispatch-pekko",

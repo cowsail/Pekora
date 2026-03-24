@@ -2,6 +2,8 @@ package org.pekora.api
 
 import com.typesafe.config.ConfigFactory
 import org.junit.jupiter.api.Test
+import org.pekora.framework.DistributedWorkerProvider
+import org.pekora.framework.DistributedWorkersSettings
 import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

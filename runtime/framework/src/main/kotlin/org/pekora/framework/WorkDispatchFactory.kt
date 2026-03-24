@@ -1,4 +1,4 @@
-package org.pekora.api
+package org.pekora.framework
 
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
@@ -11,9 +11,9 @@ import org.pekora.dispatch.core.QueueStepDispatchGateway
 import org.pekora.dispatch.core.StepDispatchGateway
 import org.pekora.dispatch.core.WorkQueueProvider
 import org.pekora.dispatch.pekko.PekkoWorkQueueProvider
+import org.pekora.worker.ShardedStepResultSink
 import org.pekora.worker.WorkerHost
 import org.pekora.worker.WorkerHostConfig
-import org.pekora.worker.ShardedStepResultSink
 import org.slf4j.LoggerFactory
 
 data class WorkDispatchBootstrap(
