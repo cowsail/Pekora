@@ -22,10 +22,17 @@ data class LeasedWorkItem(
     val item: WorkItem,
 )
 
+data class WorkQueueStats(
+    val pendingCount: Int,
+    val leasedCount: Int,
+    val expiredLeaseCount: Long,
+)
+
 interface WorkQueueProvider {
     fun enqueue(item: WorkItem): CompletionStage<Unit>
     fun claim(workerId: String, limit: Int): CompletionStage<List<LeasedWorkItem>>
     fun heartbeat(leaseId: String, extendMs: Long): CompletionStage<Boolean>
     fun ack(leaseId: String): CompletionStage<Unit>
     fun release(leaseId: String, reason: String): CompletionStage<Unit>
+    fun stats(): CompletionStage<WorkQueueStats>
 }

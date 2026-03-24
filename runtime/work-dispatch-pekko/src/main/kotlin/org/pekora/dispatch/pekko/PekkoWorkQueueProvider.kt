@@ -12,6 +12,7 @@ import org.apache.pekko.actor.typed.javadsl.Behaviors
 import org.apache.pekko.actor.typed.javadsl.Receive
 import org.pekora.dispatch.core.LeasedWorkItem
 import org.pekora.dispatch.core.WorkItem
+import org.pekora.dispatch.core.WorkQueueStats
 import org.pekora.dispatch.core.WorkQueueProvider
 import java.time.Duration
 import java.util.UUID
@@ -52,6 +53,10 @@ class PekkoWorkQueueProvider private constructor(
     override fun release(leaseId: String, reason: String): CompletionStage<Unit> =
         AskPattern.ask(queueActor, { replyTo -> Release(leaseId, reason, replyTo) }, askTimeout, scheduler)
             .thenApply { Unit }
+
+    override fun stats(): CompletionStage<WorkQueueStats> =
+        AskPattern.ask(queueActor, { replyTo -> GetStats(replyTo) }, askTimeout, scheduler)
+            .thenApply { response -> response.stats }
 }
 
 internal sealed interface WorkQueueCommand
@@ -84,9 +89,14 @@ private data class Release(
     val replyTo: ActorRef<QueueAck>,
 ) : WorkQueueCommand
 
+private data class GetStats(
+    val replyTo: ActorRef<QueueStatsResponse>,
+) : WorkQueueCommand
+
 private data class QueueAck(val accepted: Boolean = true)
 private data class HeartbeatAck(val success: Boolean)
 private data class ClaimedItems(val items: List<LeasedWorkItem>)
+private data class QueueStatsResponse(val stats: WorkQueueStats)
 
 private class PekkoWorkQueue(
     context: ActorContext<WorkQueueCommand>,
@@ -105,6 +115,7 @@ private class PekkoWorkQueue(
 
     private val pending = ArrayDeque<WorkItem>()
     private val leasesById = mutableMapOf<String, LeaseRecord>()
+    private var expiredLeaseCount: Long = 0
 
     override fun createReceive(): Receive<WorkQueueCommand> =
         newReceiveBuilder()
@@ -113,6 +124,7 @@ private class PekkoWorkQueue(
             .onMessage(Heartbeat::class.java, this::onHeartbeat)
             .onMessage(Ack::class.java, this::onAck)
             .onMessage(Release::class.java, this::onRelease)
+            .onMessage(GetStats::class.java, this::onGetStats)
             .build()
 
     private fun onEnqueue(msg: Enqueue): Behavior<WorkQueueCommand> {
@@ -175,6 +187,20 @@ private class PekkoWorkQueue(
         return this
     }
 
+    private fun onGetStats(msg: GetStats): Behavior<WorkQueueCommand> {
+        reclaimExpiredLeases()
+        msg.replyTo.tell(
+            QueueStatsResponse(
+                WorkQueueStats(
+                    pendingCount = pending.size,
+                    leasedCount = leasesById.size,
+                    expiredLeaseCount = expiredLeaseCount,
+                )
+            )
+        )
+        return this
+    }
+
     private fun reclaimExpiredLeases() {
         val now = System.currentTimeMillis()
         val expired = leasesById.values.filter { it.leasedUntilEpochMs <= now }
@@ -184,6 +210,7 @@ private class PekkoWorkQueue(
         expired.forEach { lease ->
             leasesById.remove(lease.leaseId)
             pending.addFirst(lease.workItem)
+            expiredLeaseCount += 1
         }
     }
 }

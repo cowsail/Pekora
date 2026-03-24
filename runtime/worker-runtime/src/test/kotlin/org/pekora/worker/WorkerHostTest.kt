@@ -8,6 +8,7 @@ import org.pekora.dispatch.core.LeasedWorkItem
 import org.pekora.dispatch.core.StepResultSink
 import org.pekora.dispatch.core.WorkItem
 import org.pekora.dispatch.core.WorkQueueProvider
+import org.pekora.dispatch.core.WorkQueueStats
 import org.pekora.dsl.StepExecutionRequest
 import org.pekora.dsl.StepExecutionResult
 import org.pekora.dsl.StepKind
@@ -131,6 +132,15 @@ private class RecordingQueueProvider(
         releaseReasons.add(reason)
         return CompletableFuture.completedFuture(Unit)
     }
+
+    override fun stats(): CompletionStage<WorkQueueStats> =
+        CompletableFuture.completedFuture(
+            WorkQueueStats(
+                pendingCount = remaining.size,
+                leasedCount = 0,
+                expiredLeaseCount = 0,
+            )
+        )
 }
 
 private class RecordingResultSink : StepResultSink {

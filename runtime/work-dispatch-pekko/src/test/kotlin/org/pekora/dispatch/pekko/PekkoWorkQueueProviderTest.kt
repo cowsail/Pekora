@@ -54,7 +54,32 @@ class PekkoWorkQueueProviderTest {
         assertTrue(emptyClaim.isEmpty())
     }
 
-    private fun workItem(stepId: String): WorkItem =
+    @Test
+    fun `expired leases are re-queued and reflected in stats`() {
+        val provider = PekkoWorkQueueProvider.create(
+            system = testKit.system(),
+            actorName = "work-queue-${UUID.randomUUID()}",
+            askTimeout = Duration.ofSeconds(3),
+        )
+
+        provider.enqueue(workItem(stepId = "step-expired", leaseTimeoutMs = 25)).toCompletableFuture().get(3, TimeUnit.SECONDS)
+
+        val claim = provider.claim("worker-a", 1).toCompletableFuture().get(3, TimeUnit.SECONDS)
+        assertEquals(1, claim.size)
+
+        Thread.sleep(75)
+
+        val stats = provider.stats().toCompletableFuture().get(3, TimeUnit.SECONDS)
+        assertEquals(1, stats.pendingCount)
+        assertEquals(0, stats.leasedCount)
+        assertEquals(1L, stats.expiredLeaseCount)
+
+        val reclaimed = provider.claim("worker-b", 1).toCompletableFuture().get(3, TimeUnit.SECONDS)
+        assertEquals(1, reclaimed.size)
+        assertEquals("step-expired", reclaimed.first().item.request.stepId)
+    }
+
+    private fun workItem(stepId: String, leaseTimeoutMs: Long = 60_000): WorkItem =
         WorkItem(
             workItemId = UUID.randomUUID().toString(),
             attempt = 1,
@@ -66,7 +91,7 @@ class PekkoWorkQueueProviderTest {
                 input = mapOf("prompt" to "hello"),
             ),
             createdAtEpochMs = System.currentTimeMillis(),
-            leaseTimeoutMs = 60_000,
+            leaseTimeoutMs = leaseTimeoutMs,
             maxAttempts = 1,
         )
 }
