@@ -22,7 +22,7 @@ A Pekko-based runtime and framework that turns AI agent workflows into:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Control Plane                         │
-│         HTTP API (templates, runs, approvals)            │
+│      Optional HTTP API Plugin (templates, runs, approvals)│
 └─────────────┬───────────────────────────┬───────────────┘
               │                           │
 ┌─────────────▼───────────┐   ┌───────────▼───────────────┐
@@ -64,10 +64,11 @@ pekora/
 │   └── generic/          # Generic HTTP or in-process actor adapter
 ├── runtime/
 │   ├── run-engine/       # RunEntity, StepExecutor, ApprovalManager
+│   ├── framework/        # Framework bootstrap + in-process client API
 │   ├── workflow-registry/# WorkflowRegistry actor
 │   ├── policy/           # PolicyGuard
 │   ├── projection/       # Read-model projections
-│   └── api/              # HTTP routes + server bootstrap
+│   └── api/              # Optional HTTP plugin + server entrypoint
 ├── examples/
 │   └── issue-to-pr/      # End-to-end example workflow
 ├── docs/                 # Design spec, next steps
@@ -87,7 +88,27 @@ pekora/
 ./gradlew build
 ```
 
-### Run the Server
+### Embed the Framework
+
+```kotlin
+import org.pekora.dsl.WorkflowParser
+import org.pekora.framework.CreateRunSpec
+import org.pekora.framework.PekoraFramework
+import org.pekora.framework.PekoraFrameworkOptions
+
+val handle = PekoraFramework.start(
+    options = PekoraFrameworkOptions(
+        adapters = mapOf("my-backend" to myAdapter),
+    ),
+)
+
+val client = handle.client()
+client.createTemplate(id = "hello", name = "Hello").toCompletableFuture().get()
+client.publishVersion("hello", 1, WorkflowParser.parse(workflowYaml)).toCompletableFuture().get()
+client.createRun(CreateRunSpec(templateId = "hello")).toCompletableFuture().get()
+```
+
+### Run the Optional HTTP Server
 
 ```bash
 ./gradlew :runtime:api:run

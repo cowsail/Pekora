@@ -15,6 +15,7 @@ dependencies {
     dokka(project(":adapters:a2a"))
     dokka(project(":adapters:native"))
     dokka(project(":runtime:run-engine"))
+    dokka(project(":runtime:framework"))
     dokka(project(":runtime:work-dispatch-core"))
     dokka(project(":runtime:work-dispatch-pekko"))
     dokka(project(":runtime:worker-runtime"))

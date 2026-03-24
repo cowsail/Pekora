@@ -1,4 +1,4 @@
-package org.pekora.api
+package org.pekora.framework
 
 import com.typesafe.config.Config
 import java.time.Duration
