@@ -2,6 +2,7 @@ package org.pekora.api
 
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
+import org.apache.pekko.actor.typed.Props
 import org.apache.pekko.actor.typed.javadsl.ActorContext
 import org.apache.pekko.cluster.sharding.typed.javadsl.ClusterSharding
 import org.pekora.adapters.AgentRuntimeAdapter
@@ -64,14 +65,9 @@ object WorkDispatchFactory {
 
         val replicas = settings.embeddedWorkers.replicas.coerceAtLeast(0)
         return (0 until replicas).map { index ->
-            val workerId = "${settings.embeddedWorkers.workerIdPrefix}-${index + 1}"
             val actorName = "worker-host-${index + 1}"
-            val config = WorkerHostConfig(
-                workerId = workerId,
-                pollInterval = settings.embeddedWorkers.pollInterval,
-                maxClaimsPerPoll = settings.embeddedWorkers.maxClaimsPerPoll,
-            )
-            logger.info("Starting embedded worker {} of {} with id {}", index + 1, replicas, workerId)
+            val config = workerConfig(settings, index)
+            logger.info("Starting embedded worker {} of {} with id {}", index + 1, replicas, config.workerId)
             context.spawn(
                 WorkerHost.create(
                     config = config,
@@ -83,4 +79,40 @@ object WorkDispatchFactory {
             )
         }
     }
+
+    fun spawnEmbeddedWorkers(
+        system: ActorSystem<*>,
+        settings: DistributedWorkersSettings,
+        workQueueProvider: WorkQueueProvider?,
+        agentAdapters: Map<String, AgentRuntimeAdapter>,
+        sharding: ClusterSharding,
+    ): List<ActorRef<*>> {
+        if (workQueueProvider == null || !settings.embeddedWorkers.enabled) {
+            return emptyList()
+        }
+
+        val replicas = settings.embeddedWorkers.replicas.coerceAtLeast(0)
+        return (0 until replicas).map { index ->
+            val actorName = "worker-host-test-${index + 1}-${settings.embeddedWorkers.workerIdPrefix}"
+            val config = workerConfig(settings, index)
+            logger.info("Starting embedded worker {} of {} with id {}", index + 1, replicas, config.workerId)
+            system.systemActorOf(
+                WorkerHost.create(
+                    config = config,
+                    workQueueProvider = workQueueProvider,
+                    agentAdapters = agentAdapters,
+                    sharding = sharding,
+                ),
+                actorName,
+                Props.empty(),
+            )
+        }
+    }
+
+    private fun workerConfig(settings: DistributedWorkersSettings, index: Int): WorkerHostConfig =
+        WorkerHostConfig(
+            workerId = "${settings.embeddedWorkers.workerIdPrefix}-${index + 1}",
+            pollInterval = settings.embeddedWorkers.pollInterval,
+            maxClaimsPerPoll = settings.embeddedWorkers.maxClaimsPerPoll,
+        )
 }

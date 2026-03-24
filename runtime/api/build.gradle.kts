@@ -34,4 +34,6 @@ dependencies {
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:$jacksonVersion")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:$jacksonVersion")
     runtimeOnly("ch.qos.logback:logback-classic:$logbackVersion")
+
+    testImplementation("org.apache.pekko:pekko-actor-testkit-typed_3:$pekkoVersion")
 }
