@@ -36,16 +36,26 @@
  */
 package org.pekora.api
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import org.apache.pekko.NotUsed
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.ActorSystem
 import org.apache.pekko.actor.typed.javadsl.AskPattern
 import org.apache.pekko.cluster.sharding.typed.javadsl.ClusterSharding
 import org.apache.pekko.http.javadsl.marshallers.jackson.Jackson
+import org.apache.pekko.http.javadsl.model.HttpEntities
+import org.apache.pekko.http.javadsl.model.MediaTypes
 import org.apache.pekko.http.javadsl.model.StatusCodes
 import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.http.javadsl.server.PathMatchers
 import org.apache.pekko.http.javadsl.server.Route
+import org.apache.pekko.stream.OverflowStrategy
+import org.apache.pekko.stream.SystemMaterializer
+import org.apache.pekko.stream.javadsl.Source
+import org.apache.pekko.util.ByteString
 import org.pekora.engine.*
+import org.pekora.projection.RunNotification
+import org.pekora.projection.RunNotificationStore
 import org.pekora.projection.RunProjectionStore
 import org.pekora.registry.*
 import java.time.Duration
@@ -75,10 +85,12 @@ class RunRoutes(
     private val registry: ActorRef<RegistryCommand>,
     private val approvalManager: ActorRef<ApprovalCommand>,
     private val runProjection: RunProjectionStore,
+    private val runNotifications: RunNotificationStore,
     private val system: ActorSystem<*>,
 ) : AllDirectives() {
 
     private val askTimeout = Duration.ofSeconds(10)
+    private val mapper = jacksonObjectMapper()
 
     /**
      * Builds and returns the composite [Route] for all run and approval endpoints.
@@ -205,6 +217,18 @@ class RunRoutes(
                         complete(StatusCodes.NOT_FOUND, "Run not found")
                     } else {
                         complete(StatusCodes.OK, runProjection.getTimeline(runId), Jackson.marshaller())
+                    }
+                }
+            },
+            path(PathMatchers.segment().slash("events")) { runId ->
+                get {
+                    optionalHeaderValueByName("Last-Event-ID") { lastEventId ->
+                        val summary = runProjection.getSummary(runId)
+                        if (summary == null) {
+                            complete(StatusCodes.NOT_FOUND, "Run not found")
+                        } else {
+                            completeSse(runId, summary, lastEventId.orElse(null))
+                        }
                     }
                 }
             },
@@ -356,6 +380,83 @@ class RunRoutes(
             },
         )
     }
+
+    private fun completeSse(
+        runId: String,
+        currentSummary: org.pekora.projection.RunSummary,
+        lastEventId: String?,
+    ): Route {
+        val materializer = SystemMaterializer.get(system).materializer()
+        val queueAndSource = Source.queue<ByteString>(64, OverflowStrategy.dropHead()).preMaterialize(materializer)
+        val queue = queueAndSource.first()
+        val afterSequence = lastEventId?.toLongOrNull()
+        val subscription = runNotifications.subscribe(runId) { notification ->
+            queue.offer(ByteString.fromString(formatSse("run-event", notification)))
+        }
+        if (afterSequence == null) {
+            queue.offer(ByteString.fromString(formatSnapshotSse(runId, currentSummary)))
+        } else {
+            runNotifications.readFrom(runId, afterSequence).forEach { notification ->
+                queue.offer(ByteString.fromString(formatSse("run-event", notification)))
+            }
+        }
+        val source = queueAndSource.second().watchTermination { _, done ->
+            done.whenComplete { _, _ ->
+                subscription.close()
+                queue.complete()
+            }
+            NotUsed.getInstance()
+        }
+        return complete(
+            HttpEntities.createChunked(
+                MediaTypes.TEXT_EVENT_STREAM.toContentType(),
+                source,
+            )
+        )
+    }
+
+    private fun formatSnapshotSse(runId: String, summary: org.pekora.projection.RunSummary): String {
+        val payload = mapper.writeValueAsString(
+            RunSnapshotEvent(
+                runId = runId,
+                summary = summary,
+            )
+        )
+        return buildSseFrame(
+            id = "snapshot-$runId-${summary.startedAt ?: 0}-${summary.completedAt ?: 0}",
+            event = "snapshot",
+            data = payload,
+        )
+    }
+
+    private fun formatSse(eventName: String, notification: RunNotification): String {
+        val payload = mapper.writeValueAsString(
+            RunEventEnvelope(
+                sequence = notification.sequence,
+                runId = notification.event.runId,
+                timestamp = notification.event.timestamp,
+                eventType = notification.event::class.simpleName ?: "Unknown",
+                summary = notification.summary,
+                event = notification.event,
+            )
+        )
+        return buildSseFrame(
+            id = notification.sequence.toString(),
+            event = eventName,
+            data = payload,
+        )
+    }
+
+    private fun buildSseFrame(id: String, event: String, data: String): String {
+        return buildString {
+            append("id: ").append(id).append('\n')
+            append("event: ").append(event).append('\n')
+            data.lineSequence().forEach { line ->
+                append("data: ").append(line).append('\n')
+            }
+            append('\n')
+        }
+    }
 }
 
 // --- Request/Response DTOs ---
@@ -417,4 +518,18 @@ data class StepOutputResponse(
     val runId: String,
     val stepId: String,
     val output: Map<String, String>,
+)
+
+data class RunEventEnvelope(
+    val sequence: Long,
+    val runId: String,
+    val timestamp: Long,
+    val eventType: String,
+    val summary: org.pekora.projection.RunSummary?,
+    val event: org.pekora.dsl.RunEvent,
+)
+
+data class RunSnapshotEvent(
+    val runId: String,
+    val summary: org.pekora.projection.RunSummary,
 )

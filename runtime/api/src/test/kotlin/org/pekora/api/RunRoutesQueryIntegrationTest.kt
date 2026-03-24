@@ -26,7 +26,6 @@ import org.pekora.engine.ApprovalManager
 import org.pekora.engine.CreateRun
 import org.pekora.engine.GetRunStatus
 import org.pekora.engine.LoadWorkflow
-import org.pekora.engine.RunCommand
 import org.pekora.engine.RunCommandResponse
 import org.pekora.engine.RunEntity
 import org.pekora.engine.RunEntityTypeKey
@@ -36,9 +35,12 @@ import org.pekora.engine.StepExecutor
 import org.pekora.framework.DistributedWorkersSettings
 import org.pekora.framework.WorkDispatchFactory
 import org.pekora.policy.PolicyGuard
-import org.pekora.projection.RunProjectionStore
-import org.pekora.registry.RegistryCommand
+import org.pekora.projection.DefaultRunEventProjector
+import org.pekora.projection.InMemoryRunNotificationStore
+import org.pekora.projection.InMemoryRunProjectionStore
 import org.pekora.registry.WorkflowRegistry
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -94,6 +96,74 @@ class RunRoutesQueryIntegrationTest {
             assertEquals(404, missingStepOutput.statusCode())
         }
     }
+
+    @Test
+    fun `run events endpoint streams snapshots and progress updates`() {
+        TestHarness(QuerySuccessAdapter()).use { harness ->
+            val runId = harness.createLoadedRun(tenantId = "tenant-sse")
+            harness.openEventStream("/runs/$runId/events").use { stream ->
+                val started = harness.startRun(runId)
+                assertTrue(started.success)
+
+                val snapshot = stream.nextEvent()
+                assertEquals("snapshot", snapshot["event"])
+                assertTrue(snapshot["data"]!!.contains("\"runId\":\"$runId\""))
+
+                val updates = mutableListOf<Map<String, String>>()
+                while (updates.size < 6) {
+                    val event = stream.nextEvent()
+                    updates.add(event)
+                    if (event["data"]!!.contains("\"eventType\":\"RunCompleted\"")) {
+                        break
+                    }
+                }
+
+                assertTrue(updates.any { it["id"] != null })
+                assertTrue(updates.any { it["data"]!!.contains("\"eventType\":\"RunStarted\"") })
+                assertTrue(updates.any { it["data"]!!.contains("\"eventType\":\"RunCompleted\"") })
+            }
+        }
+    }
+
+    @Test
+    fun `run events endpoint replays from last event id`() {
+        TestHarness(QuerySuccessAdapter()).use { harness ->
+            val runId = harness.createLoadedRun(tenantId = "tenant-sse-replay")
+            var runStartedId: String? = null
+
+            harness.openEventStream("/runs/$runId/events").use { stream ->
+                assertTrue(harness.startRun(runId).success)
+
+                stream.nextEvent()
+                while (true) {
+                    val event = stream.nextEvent()
+                    val data = event["data"] ?: ""
+                    if (data.contains("\"eventType\":\"RunStarted\"")) {
+                        runStartedId = event["id"]
+                    }
+                    if (data.contains("\"eventType\":\"RunCompleted\"")) {
+                        break
+                    }
+                }
+            }
+
+            val replayFrom = runStartedId ?: throw AssertionError("Expected to capture RunStarted event id")
+            harness.openEventStream("/runs/$runId/events", replayFrom).use { stream ->
+                val replayed = mutableListOf<Map<String, String>>()
+                while (replayed.size < 6) {
+                    val event = stream.nextEvent()
+                    replayed.add(event)
+                    if (event["data"]!!.contains("\"eventType\":\"RunCompleted\"")) {
+                        break
+                    }
+                }
+
+                assertTrue(replayed.none { it["event"] == "snapshot" })
+                assertTrue(replayed.any { it["data"]!!.contains("\"eventType\":\"RunCompleted\"") })
+                assertTrue(replayed.all { it["id"]!!.toLong() > replayFrom.toLong() })
+            }
+        }
+    }
 }
 
 private class TestHarness(
@@ -105,6 +175,7 @@ private class TestHarness(
     private val sharding: ClusterSharding
     private val binding: ServerBinding
     private val port: Int
+    private val runNotifications = InMemoryRunNotificationStore()
 
     init {
         val config = ConfigFactory.parseString(
@@ -128,7 +199,8 @@ private class TestHarness(
         sharding = ClusterSharding.get(system)
         val registry = testKit.spawn(WorkflowRegistry.create(), "workflow-registry-${UUID.randomUUID()}")
         val approvalManager = testKit.spawn(ApprovalManager.create(), "approval-manager-${UUID.randomUUID()}")
-        val runProjection = RunProjectionStore()
+        val runProjection = InMemoryRunProjectionStore()
+        val runProjector = DefaultRunEventProjector(runProjection, runNotifications)
         val distributedWorkers = DistributedWorkersSettings.fromConfig(system.settings().config())
         val workDispatch = WorkDispatchFactory.bootstrap(system, distributedWorkers)
         val stepExecutor = testKit.spawn(
@@ -149,17 +221,24 @@ private class TestHarness(
                     approvalManager = approvalManager,
                     registry = registry,
                     sharding = sharding,
-                    eventObserver = runProjection::applyEvent,
+                    eventObserver = runProjector::project,
                 )
             }
         )
 
-        val route = RunRoutes(sharding, registry, approvalManager, runProjection, system).routes()
+        val route = RunRoutes(sharding, registry, approvalManager, runProjection, runNotifications, system).routes()
         binding = Http.get(system).newServerAt("127.0.0.1", 0).bind(route).toCompletableFuture().get()
         port = binding.localAddress().port
     }
 
     fun createAndStartRun(tenantId: String): String {
+        val runId = createLoadedRun(tenantId)
+        val started = startRun(runId)
+        assertTrue(started.success)
+        return runId
+    }
+
+    fun createLoadedRun(tenantId: String): String {
         val runId = "run-${UUID.randomUUID()}"
         val runRef = sharding.entityRefFor(RunEntityTypeKey.typeKey, runId)
         val probe = testKit.createTestProbe<RunCommandResponse>()
@@ -167,9 +246,14 @@ private class TestHarness(
         assertTrue(probe.receiveMessage().success)
         runRef.tell(LoadWorkflow(definition(), probe.ref))
         assertTrue(probe.receiveMessage().success)
-        runRef.tell(StartRun(probe.ref))
-        assertTrue(probe.receiveMessage().success)
         return runId
+    }
+
+    fun startRun(runId: String): RunCommandResponse {
+        val runRef = sharding.entityRefFor(RunEntityTypeKey.typeKey, runId)
+        val probe = testKit.createTestProbe<RunCommandResponse>()
+        runRef.tell(StartRun(probe.ref))
+        return probe.receiveMessage()
     }
 
     fun awaitStatus(
@@ -208,6 +292,19 @@ private class TestHarness(
         return mapper.readTree(response.body())
     }
 
+    fun openEventStream(path: String, lastEventId: String? = null): SseStream {
+        val connection = URI.create("http://127.0.0.1:$port$path").toURL().openConnection()
+        connection.connectTimeout = 5_000
+        connection.readTimeout = 5_000
+        connection.setRequestProperty("Accept", "text/event-stream")
+        if (lastEventId != null) {
+            connection.setRequestProperty("Last-Event-ID", lastEventId)
+        }
+        connection.connect()
+        val reader = BufferedReader(InputStreamReader(connection.getInputStream()))
+        return SseStream(reader)
+    }
+
     override fun close() {
         binding.unbind().toCompletableFuture().get()
         testKit.shutdownTestKit()
@@ -223,6 +320,44 @@ private class TestHarness(
             ),
             agents = listOf(AgentDefinition(id = "agent-1", backend = adapter.backendId)),
         )
+}
+
+private class SseStream(
+    private val reader: BufferedReader,
+) : AutoCloseable {
+    fun nextEvent(): Map<String, String> {
+        val event = linkedMapOf<String, String>()
+        val dataLines = mutableListOf<String>()
+        while (true) {
+            val line = reader.readLine() ?: throw AssertionError("SSE stream closed unexpectedly")
+            if (line.isEmpty()) {
+                if (dataLines.isNotEmpty()) {
+                    event["data"] = dataLines.joinToString("\n")
+                }
+                if (event.isNotEmpty()) {
+                    return event
+                }
+                continue
+            }
+
+            val delimiter = line.indexOf(':')
+            if (delimiter <= 0) {
+                continue
+            }
+
+            val field = line.substring(0, delimiter)
+            val value = line.substring(delimiter + 1).trimStart()
+            if (field == "data") {
+                dataLines.add(value)
+            } else {
+                event[field] = value
+            }
+        }
+    }
+
+    override fun close() {
+        reader.close()
+    }
 }
 
 private class QuerySuccessAdapter : AgentRuntimeAdapter {
