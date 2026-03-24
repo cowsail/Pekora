@@ -21,6 +21,7 @@ class FrameworkHttpPlugin(
                 runtime.registry,
                 runtime.approvalManager,
                 runtime.runProjection,
+                runtime.runNotifications,
                 runtime.system,
             ).routes(),
             HealthRoutes(runtime.agentAdapters, runtime.system).routes(),

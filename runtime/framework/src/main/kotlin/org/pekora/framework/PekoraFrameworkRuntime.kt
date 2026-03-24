@@ -6,6 +6,7 @@ import org.apache.pekko.cluster.sharding.typed.javadsl.ClusterSharding
 import org.pekora.adapters.AgentRuntimeAdapter
 import org.pekora.engine.ApprovalCommand
 import org.pekora.engine.StepExecutorMessage
+import org.pekora.projection.RunNotificationStore
 import org.pekora.projection.RunProjectionStore
 import org.pekora.registry.RegistryCommand
 
@@ -16,6 +17,7 @@ data class PekoraFrameworkRuntime(
     val sharding: ClusterSharding,
     val stepExecutor: ActorRef<StepExecutorMessage>,
     val runProjection: RunProjectionStore,
+    val runNotifications: RunNotificationStore,
     val agentAdapters: Map<String, AgentRuntimeAdapter>,
     val distributedWorkers: DistributedWorkersSettings,
 )

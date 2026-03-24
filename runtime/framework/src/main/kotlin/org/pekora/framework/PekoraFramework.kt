@@ -17,6 +17,10 @@ import org.pekora.engine.RunEntity
 import org.pekora.engine.RunEntityTypeKey
 import org.pekora.engine.StepExecutor
 import org.pekora.policy.PolicyGuard
+import org.pekora.projection.DefaultRunEventProjector
+import org.pekora.projection.InMemoryRunNotificationStore
+import org.pekora.projection.InMemoryRunProjectionStore
+import org.pekora.projection.RunNotificationStore
 import org.pekora.projection.RunProjectionStore
 import org.pekora.registry.WorkflowRegistry
 import org.slf4j.LoggerFactory
@@ -27,6 +31,8 @@ data class PekoraFrameworkOptions(
     val nativeAgents: NativeAgentRegistry = NativeAgentRegistry(),
     val adapters: Map<String, AgentRuntimeAdapter> = emptyMap(),
     val plugins: List<PekoraPlugin> = emptyList(),
+    val runProjectionStoreFactory: () -> RunProjectionStore = { InMemoryRunProjectionStore() },
+    val runNotificationStoreFactory: () -> RunNotificationStore = { InMemoryRunNotificationStore() },
 )
 
 class PekoraFrameworkHandle internal constructor(
@@ -75,7 +81,9 @@ object PekoraFramework {
         val agentAdapters = AdapterFactory.createAdapters(system.settings().config(), system, options.nativeAgents) + options.adapters
         val distributedWorkers = DistributedWorkersSettings.fromConfig(system.settings().config())
         val workDispatch = WorkDispatchFactory.bootstrap(system, distributedWorkers)
-        val runProjection = RunProjectionStore()
+        val runProjection = options.runProjectionStoreFactory()
+        val runNotifications = options.runNotificationStoreFactory()
+        val runProjector = DefaultRunEventProjector(runProjection, runNotifications)
 
         val stepExecutor = ctx.spawn(
             StepExecutor.create(
@@ -100,7 +108,7 @@ object PekoraFramework {
                     approvalManager = approvalManager,
                     registry = registry,
                     sharding = sharding,
-                    eventObserver = runProjection::applyEvent,
+                    eventObserver = runProjector::project,
                 )
             }
         )
@@ -121,6 +129,7 @@ object PekoraFramework {
             sharding = sharding,
             stepExecutor = stepExecutor,
             runProjection = runProjection,
+            runNotifications = runNotifications,
             agentAdapters = agentAdapters,
             distributedWorkers = distributedWorkers,
         )
