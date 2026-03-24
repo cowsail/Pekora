@@ -110,6 +110,7 @@ data class StartRun(
  */
 data class StepResult(
     val stepId: String,
+    val attempt: Int = 1,
     val result: StepExecutionResult,
 ) : RunCommand
 

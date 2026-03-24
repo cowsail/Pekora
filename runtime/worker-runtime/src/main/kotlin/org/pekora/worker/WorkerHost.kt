@@ -130,7 +130,7 @@ class WorkerHost(
         )
 
         val runRef = sharding.entityRefFor(RunEntityTypeKey.typeKey, request.runId)
-        runRef.tell(StepResult(stepId = request.stepId, result = result))
+        runRef.tell(StepResult(stepId = request.stepId, attempt = msg.leased.item.attempt, result = result))
 
         workQueueProvider.ack(msg.leased.leaseId).whenComplete { _, ackError ->
             if (ackError != null) {

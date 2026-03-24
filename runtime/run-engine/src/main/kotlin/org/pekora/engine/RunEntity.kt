@@ -144,6 +144,10 @@ class RunEntity private constructor(
     }
 
     private fun onStepResult(state: RunState, cmd: StepResult): Effect<RunEvent, RunState> {
+        if (!isCurrentAttemptResult(state, cmd)) {
+            return Effect().none()
+        }
+
         if (cmd.result.status == StepResultStatus.SUCCEEDED) {
             val event = StepCompleted(
                 runId = runId,
@@ -445,9 +449,11 @@ class RunEntity private constructor(
                     output = cmd.status.outputs,
                 )
                 Effect().persist(completeEvent).thenRun {
+                    val attempt = state.stepAttempts[cmd.stepId] ?: 1
                     ctx.self.tell(
                         StepResult(
                             stepId = cmd.stepId,
+                            attempt = attempt,
                             result = StepExecutionResult(
                                 status = StepResultStatus.SUCCEEDED,
                                 output = cmd.status.outputs,
@@ -466,9 +472,11 @@ class RunEntity private constructor(
                     error = error,
                 )
                 Effect().persist(failedEvent).thenRun {
+                    val attempt = state.stepAttempts[cmd.stepId] ?: 1
                     ctx.self.tell(
                         StepResult(
                             stepId = cmd.stepId,
+                            attempt = attempt,
                             result = StepExecutionResult(
                                 status = StepResultStatus.FAILED,
                                 error = error,
@@ -577,7 +585,7 @@ class RunEntity private constructor(
             }
             StepKind.RESULT -> {
                 val resolvedOutput = resolveInputExpressions(step.output, state)
-                stepExecutor.tell(ExecuteResultStep(runId, stepId, resolvedOutput, ctx.self))
+                stepExecutor.tell(ExecuteResultStep(runId, stepId, output = resolvedOutput, replyTo = ctx.self))
             }
             StepKind.PARALLEL -> {
                 ctx.self.tell(StartParallelInternal(stepId))
@@ -705,6 +713,18 @@ class RunEntity private constructor(
             }
         }
         return output
+    }
+
+    private fun isCurrentAttemptResult(state: RunState, cmd: StepResult): Boolean {
+        val expectedAttempt = state.stepAttempts[cmd.stepId] ?: 1
+        if (cmd.attempt != expectedAttempt) {
+            return false
+        }
+
+        return when (state.stepStates[cmd.stepId]) {
+            StepState.SUCCEEDED, StepState.FAILED, StepState.CANCELLED -> false
+            else -> true
+        }
     }
 
     private fun findParallelMembership(state: RunState, stepId: String): Pair<String, String>? {

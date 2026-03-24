@@ -50,6 +50,7 @@ class StepExecutorDispatchTest {
 
         val result = replyProbe.receiveMessage() as StepResult
         assertEquals("step-1", result.stepId)
+        assertEquals(1, result.attempt)
         assertEquals(StepResultStatus.SUCCEEDED, result.result.status)
         assertEquals(1, adapterInvocations.get())
     }

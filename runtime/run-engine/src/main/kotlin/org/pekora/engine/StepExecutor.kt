@@ -99,12 +99,14 @@ data class RunTerminated(val runId: String) : StepExecutorMessage
 data class ExecuteResultStep(
     val runId: String,
     val stepId: String,
+    val attempt: Int = 1,
     val output: Map<String, String>,
     val replyTo: ActorRef<RunCommand>,
 ) : StepExecutorMessage
 
 internal data class DispatchDecisionInternal(
     val request: StepExecutionRequest,
+    val attempt: Int,
     val replyTo: ActorRef<RunCommand>,
     val decision: DispatchDecision? = null,
     val throwable: Throwable? = null,
@@ -165,7 +167,7 @@ class StepExecutor(
                     status = StepResultStatus.FAILED,
                     error = "Policy violation: $violations",
                 )
-                msg.replyTo.tell(StepResult(request.stepId, failResult))
+                msg.replyTo.tell(StepResult(request.stepId, msg.attempt, failResult))
                 return this
             }
         }
@@ -183,9 +185,9 @@ class StepExecutor(
             )
         ) { decision, throwable ->
             if (throwable != null) {
-                DispatchDecisionInternal(request, msg.replyTo, throwable = throwable)
+                DispatchDecisionInternal(request, msg.attempt, msg.replyTo, throwable = throwable)
             } else {
-                DispatchDecisionInternal(request, msg.replyTo, decision = decision)
+                DispatchDecisionInternal(request, msg.attempt, msg.replyTo, decision = decision)
             }
         }
 
@@ -200,12 +202,12 @@ class StepExecutor(
                 status = StepResultStatus.FAILED,
                 error = throwable.message ?: "Unknown error",
             )
-            msg.replyTo.tell(StepResult(msg.request.stepId, failResult))
+            msg.replyTo.tell(StepResult(msg.request.stepId, msg.attempt, failResult))
             return this
         }
 
         when (val decision = msg.decision) {
-            is DispatchDecision.ExecuteInline -> executeInline(decision.executionRequest, msg.replyTo)
+            is DispatchDecision.ExecuteInline -> executeInline(decision.executionRequest, msg.attempt, msg.replyTo)
             is DispatchDecision.Dispatched -> {
                 logger.info(
                     "Queued step {} for distributed execution with work item {}",
@@ -218,7 +220,7 @@ class StepExecutor(
                     status = StepResultStatus.FAILED,
                     error = "Dispatch gateway returned no decision",
                 )
-                msg.replyTo.tell(StepResult(msg.request.stepId, failResult))
+                msg.replyTo.tell(StepResult(msg.request.stepId, msg.attempt, failResult))
             }
         }
         return this
@@ -229,7 +231,7 @@ class StepExecutor(
             status = StepResultStatus.SUCCEEDED,
             output = msg.output,
         )
-        msg.replyTo.tell(StepResult(msg.stepId, result))
+        msg.replyTo.tell(StepResult(msg.stepId, msg.attempt, result))
         return this
     }
 
@@ -241,6 +243,7 @@ class StepExecutor(
 
     private fun executeInline(
         request: StepExecutionRequest,
+        attempt: Int,
         replyTo: ActorRef<RunCommand>,
     ) {
         context.pipeToSelf(
@@ -252,9 +255,9 @@ class StepExecutor(
                     status = StepResultStatus.FAILED,
                     error = throwable.message ?: "Unknown error",
                 )
-                StepResultInternal(request.stepId, failResult, replyTo)
+                StepResultInternal(request.stepId, attempt, failResult, replyTo)
             } else {
-                StepResultInternal(request.stepId, result, replyTo)
+                StepResultInternal(request.stepId, attempt, result, replyTo)
             }
         }
     }
@@ -288,10 +291,11 @@ class StepExecutor(
  */
 internal data class StepResultInternal(
     val stepId: String,
+    val attempt: Int,
     val result: StepExecutionResult,
     val replyTo: ActorRef<RunCommand>,
 ) : StepExecutorMessage {
     init {
-        replyTo.tell(StepResult(stepId, result))
+        replyTo.tell(StepResult(stepId, attempt, result))
     }
 }
