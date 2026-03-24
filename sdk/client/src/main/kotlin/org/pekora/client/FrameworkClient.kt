@@ -190,6 +190,59 @@ class FrameworkClient(
     }
 
     /**
+     * Lists all known workflow runs.
+     *
+     * Sends a `GET /runs` request. When [tenantId] is provided, the server filters the
+     * response to runs belonging to that tenant.
+     *
+     * @param tenantId Optional tenant identifier used to filter results.
+     * @return A [CompletionStage] that completes with the raw JSON response body.
+     */
+    fun listRuns(tenantId: String? = null): CompletionStage<String> {
+        val query = tenantId?.let { "?tenantId=$it" } ?: ""
+        return get("/runs$query")
+    }
+
+    /**
+     * Lists all currently active workflow runs.
+     *
+     * Sends a `GET /runs/active` request. When [tenantId] is provided, the server
+     * filters the response to active runs belonging to that tenant.
+     *
+     * @param tenantId Optional tenant identifier used to filter results.
+     * @return A [CompletionStage] that completes with the raw JSON response body.
+     */
+    fun listActiveRuns(tenantId: String? = null): CompletionStage<String> {
+        val query = tenantId?.let { "?tenantId=$it" } ?: ""
+        return get("/runs/active$query")
+    }
+
+    /**
+     * Retrieves the projected timeline for a workflow run.
+     *
+     * Sends a `GET /runs/{runId}/timeline` request.
+     *
+     * @param runId The unique identifier of the run to query.
+     * @return A [CompletionStage] that completes with the raw JSON response body.
+     */
+    fun getRunTimeline(runId: String): CompletionStage<String> {
+        return get("/runs/$runId/timeline")
+    }
+
+    /**
+     * Retrieves the projected output for a specific step within a run.
+     *
+     * Sends a `GET /runs/{runId}/steps/{stepId}/output` request.
+     *
+     * @param runId The unique identifier of the run to query.
+     * @param stepId The step identifier whose output is requested.
+     * @return A [CompletionStage] that completes with the raw JSON response body.
+     */
+    fun getStepOutput(runId: String, stepId: String): CompletionStage<String> {
+        return get("/runs/$runId/steps/$stepId/output")
+    }
+
+    /**
      * Cancels a running workflow.
      *
      * Sends a `POST /runs/{runId}/cancel` request.

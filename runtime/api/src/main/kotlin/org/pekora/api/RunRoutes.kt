@@ -46,6 +46,7 @@ import org.apache.pekko.http.javadsl.server.AllDirectives
 import org.apache.pekko.http.javadsl.server.PathMatchers
 import org.apache.pekko.http.javadsl.server.Route
 import org.pekora.engine.*
+import org.pekora.projection.RunProjectionStore
 import org.pekora.registry.*
 import java.time.Duration
 import java.util.UUID
@@ -73,6 +74,7 @@ class RunRoutes(
     private val sharding: ClusterSharding,
     private val registry: ActorRef<RegistryCommand>,
     private val approvalManager: ActorRef<ApprovalCommand>,
+    private val runProjection: RunProjectionStore,
     private val system: ActorSystem<*>,
 ) : AllDirectives() {
 
@@ -92,90 +94,132 @@ class RunRoutes(
 
     private fun runsRoutes(): Route = pathPrefix("runs") {
         concat(
-            // POST /runs — create and start a new run
             pathEnd {
-                post {
-                    entity(Jackson.unmarshaller(CreateRunRequest::class.java)) { req ->
-                        val runId = req.runId.ifEmpty { "run_${UUID.randomUUID()}" }
-                        val entityRef = sharding.entityRefFor(
-                            RunEntityTypeKey.typeKey,
-                            runId,
-                        )
+                concat(
+                    get {
+                        parameterOptional("tenantId") { tenantId ->
+                            complete(StatusCodes.OK, runProjection.listRuns(tenantId.orElse(null)), Jackson.marshaller())
+                        }
+                    },
+                    // POST /runs — create and start a new run
+                    post {
+                        entity(Jackson.unmarshaller(CreateRunRequest::class.java)) { req ->
+                            val runId = req.runId.ifEmpty { "run_${UUID.randomUUID()}" }
+                            val entityRef = sharding.entityRefFor(
+                                RunEntityTypeKey.typeKey,
+                                runId,
+                            )
 
-                        // First get the workflow version from registry
-                        val versionFuture = AskPattern.ask(
-                            registry,
-                            { replyTo: ActorRef<VersionResponse> ->
-                                if (req.version > 0) {
-                                    GetVersion(req.templateId, req.version, replyTo)
-                                } else {
-                                    GetLatestVersion(req.templateId, replyTo)
-                                }
-                            },
-                            askTimeout,
-                            system.scheduler(),
-                        )
-
-                        onSuccess(versionFuture) { versionResp ->
-                            if (!versionResp.found || versionResp.version == null) {
-                                complete(StatusCodes.NOT_FOUND, "Workflow version not found")
-                            } else {
-                                val wv = versionResp.version!!
-
-                                // Create the run
-                                val createFuture = AskPattern.ask(
-                                    entityRef,
-                                    { replyTo: ActorRef<RunCommandResponse> ->
-                                        CreateRun(
-                                            templateId = req.templateId,
-                                            versionNumber = wv.version,
-                                            inputs = req.inputs,
-                                            tenantId = req.tenantId,
-                                            correlationId = req.correlationId,
-                                            replyTo = replyTo,
-                                        )
-                                    },
-                                    askTimeout,
-                                    system.scheduler(),
-                                )
-
-                                onSuccess(createFuture) { createResp ->
-                                    if (!createResp.success) {
-                                        complete(StatusCodes.BAD_REQUEST, createResp, Jackson.marshaller())
+                            // First get the workflow version from registry
+                            val versionFuture = AskPattern.ask(
+                                registry,
+                                { replyTo: ActorRef<VersionResponse> ->
+                                    if (req.version > 0) {
+                                        GetVersion(req.templateId, req.version, replyTo)
                                     } else {
-                                        // Load workflow
-                                        val loadFuture = AskPattern.ask(
-                                            entityRef,
-                                            { replyTo: ActorRef<RunCommandResponse> ->
-                                                LoadWorkflow(wv.definition, replyTo)
-                                            },
-                                            askTimeout,
-                                            system.scheduler(),
-                                        )
+                                        GetLatestVersion(req.templateId, replyTo)
+                                    }
+                                },
+                                askTimeout,
+                                system.scheduler(),
+                            )
 
-                                        onSuccess(loadFuture) { _ ->
-                                            // Start the run
-                                            val startFuture = AskPattern.ask(
+                            onSuccess(versionFuture) { versionResp ->
+                                if (!versionResp.found || versionResp.version == null) {
+                                    complete(StatusCodes.NOT_FOUND, "Workflow version not found")
+                                } else {
+                                    val wv = versionResp.version!!
+
+                                    // Create the run
+                                    val createFuture = AskPattern.ask(
+                                        entityRef,
+                                        { replyTo: ActorRef<RunCommandResponse> ->
+                                            CreateRun(
+                                                templateId = req.templateId,
+                                                versionNumber = wv.version,
+                                                inputs = req.inputs,
+                                                tenantId = req.tenantId,
+                                                correlationId = req.correlationId,
+                                                replyTo = replyTo,
+                                            )
+                                        },
+                                        askTimeout,
+                                        system.scheduler(),
+                                    )
+
+                                    onSuccess(createFuture) { createResp ->
+                                        if (!createResp.success) {
+                                            complete(StatusCodes.BAD_REQUEST, createResp, Jackson.marshaller())
+                                        } else {
+                                            // Load workflow
+                                            val loadFuture = AskPattern.ask(
                                                 entityRef,
                                                 { replyTo: ActorRef<RunCommandResponse> ->
-                                                    StartRun(replyTo)
+                                                    LoadWorkflow(wv.definition, replyTo)
                                                 },
                                                 askTimeout,
                                                 system.scheduler(),
                                             )
 
-                                            onSuccess(startFuture) { startResp ->
-                                                complete(
-                                                    StatusCodes.CREATED,
-                                                    CreateRunResponse(runId, startResp.message),
-                                                    Jackson.marshaller(),
+                                            onSuccess(loadFuture) { _ ->
+                                                // Start the run
+                                                val startFuture = AskPattern.ask(
+                                                    entityRef,
+                                                    { replyTo: ActorRef<RunCommandResponse> ->
+                                                        StartRun(replyTo)
+                                                    },
+                                                    askTimeout,
+                                                    system.scheduler(),
                                                 )
+
+                                                onSuccess(startFuture) { startResp ->
+                                                    complete(
+                                                        StatusCodes.CREATED,
+                                                        CreateRunResponse(runId, startResp.message),
+                                                        Jackson.marshaller(),
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
                         }
+                    },
+                )
+            },
+            path("active") {
+                get {
+                    parameterOptional("tenantId") { tenantId ->
+                        val runs = runProjection.getActiveRuns().filter { summary ->
+                            tenantId.map { tenant -> summary.tenantId == tenant }.orElse(true)
+                        }
+                        complete(StatusCodes.OK, runs, Jackson.marshaller())
+                    }
+                }
+            },
+            path(PathMatchers.segment().slash("timeline")) { runId ->
+                get {
+                    val summary = runProjection.getSummary(runId)
+                    if (summary == null) {
+                        complete(StatusCodes.NOT_FOUND, "Run not found")
+                    } else {
+                        complete(StatusCodes.OK, runProjection.getTimeline(runId), Jackson.marshaller())
+                    }
+                }
+            },
+            path(PathMatchers.segment().slash("steps").slash(PathMatchers.segment()).slash("output")) { runId, stepId ->
+                get {
+                    val summary = runProjection.getSummary(runId)
+                    val output = runProjection.getStepOutput(runId, stepId)
+                    when {
+                        summary == null -> complete(StatusCodes.NOT_FOUND, "Run not found")
+                        output == null -> complete(StatusCodes.NOT_FOUND, "Step output not found")
+                        else -> complete(
+                            StatusCodes.OK,
+                            StepOutputResponse(runId = runId, stepId = stepId, output = output),
+                            Jackson.marshaller(),
+                        )
                     }
                 }
             },
@@ -367,4 +411,10 @@ data class CreateRunResponse(
 data class ApprovalRequest(
     val approver: String = "",
     val reason: String = "",
+)
+
+data class StepOutputResponse(
+    val runId: String,
+    val stepId: String,
+    val output: Map<String, String>,
 )
