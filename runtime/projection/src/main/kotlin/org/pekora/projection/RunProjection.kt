@@ -123,6 +123,7 @@ class RunProjectionStore {
     private val timelines = ConcurrentHashMap<String, MutableList<RunTimelineEntry>>()
     // runId -> stepId -> list of tool calls recorded from StepCompleted events
     private val toolCallsByStep = ConcurrentHashMap<String, MutableMap<String, List<ToolCallRecord>>>()
+    private val stepOutputsByRun = ConcurrentHashMap<String, MutableMap<String, Map<String, String>>>()
 
     /**
      * Applies a [RunEvent] to the projection, updating the corresponding [RunSummary]
@@ -169,6 +170,8 @@ class RunProjectionStore {
                 updateSummary(event.runId) {
                     it.copy(stepStates = it.stepStates + (event.stepId to StepState.SUCCEEDED))
                 }
+                stepOutputsByRun
+                    .computeIfAbsent(event.runId) { mutableMapOf() }[event.stepId] = event.output
                 val toolDetail = if (event.toolCalls.isNotEmpty()) {
                     ", tools: ${event.toolCalls.joinToString { it.tool }}"
                 } else ""
@@ -213,6 +216,8 @@ class RunProjectionStore {
                 updateSummary(event.runId) {
                     it.copy(stepStates = it.stepStates + (event.parallelStepId to StepState.SUCCEEDED))
                 }
+                stepOutputsByRun
+                    .computeIfAbsent(event.runId) { mutableMapOf() }[event.parallelStepId] = event.output
                 addTimelineEntry(event.runId, event.timestamp, "ParallelGroupCompleted", event.parallelStepId)
             }
             is ParallelGroupFailed -> {
@@ -355,6 +360,10 @@ class RunProjectionStore {
      */
     fun getToolCalls(runId: String): Map<String, List<ToolCallRecord>> {
         return toolCallsByStep[runId]?.toMap() ?: emptyMap()
+    }
+
+    fun getStepOutput(runId: String, stepId: String): Map<String, String>? {
+        return stepOutputsByRun[runId]?.get(stepId)
     }
 
     /**

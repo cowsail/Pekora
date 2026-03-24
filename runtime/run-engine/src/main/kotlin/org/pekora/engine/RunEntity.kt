@@ -21,6 +21,7 @@ class RunEntity private constructor(
     private val approvalManager: ActorRef<ApprovalCommand>,
     private val registry: ActorRef<RegistryCommand>,
     private val sharding: ClusterSharding,
+    private val eventObserver: (RunEvent) -> Unit,
 ) : EventSourcedBehavior<RunCommand, RunEvent, RunState>(persistenceId) {
 
     companion object {
@@ -33,8 +34,9 @@ class RunEntity private constructor(
             approvalManager: ActorRef<ApprovalCommand>,
             registry: ActorRef<RegistryCommand>,
             sharding: ClusterSharding,
+            eventObserver: (RunEvent) -> Unit = {},
         ): Behavior<RunCommand> = Behaviors.setup { ctx ->
-            RunEntity(runId, persistenceId, ctx, stepExecutor, approvalManager, registry, sharding)
+            RunEntity(runId, persistenceId, ctx, stepExecutor, approvalManager, registry, sharding, eventObserver)
         }
     }
 
@@ -70,30 +72,35 @@ class RunEntity private constructor(
     override fun eventHandler(): EventHandler<RunState, RunEvent> =
         newEventHandlerBuilder()
             .forAnyState()
-            .onEvent(RunCreated::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(WorkflowLoaded::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(RunStarted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(StepScheduled::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(StepStarted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(StepCompleted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(ParallelGroupStarted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(ParallelBranchCompleted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(ParallelBranchFailed::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(ParallelGroupCompleted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(ParallelGroupFailed::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(StepFailed::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(StepRetryScheduled::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(SubworkflowChildStarted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(SubworkflowChildCompleted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(SubworkflowChildFailed::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(ApprovalRequested::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(ApprovalReceived::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(RunPaused::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(RunResumed::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(RunCompleted::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(RunFailed::class.java) { state, event -> state.applyEvent(event) }
-            .onEvent(RunCancelled::class.java) { state, event -> state.applyEvent(event) }
+            .onEvent(RunCreated::class.java, this::applyObservedEvent)
+            .onEvent(WorkflowLoaded::class.java, this::applyObservedEvent)
+            .onEvent(RunStarted::class.java, this::applyObservedEvent)
+            .onEvent(StepScheduled::class.java, this::applyObservedEvent)
+            .onEvent(StepStarted::class.java, this::applyObservedEvent)
+            .onEvent(StepCompleted::class.java, this::applyObservedEvent)
+            .onEvent(ParallelGroupStarted::class.java, this::applyObservedEvent)
+            .onEvent(ParallelBranchCompleted::class.java, this::applyObservedEvent)
+            .onEvent(ParallelBranchFailed::class.java, this::applyObservedEvent)
+            .onEvent(ParallelGroupCompleted::class.java, this::applyObservedEvent)
+            .onEvent(ParallelGroupFailed::class.java, this::applyObservedEvent)
+            .onEvent(StepFailed::class.java, this::applyObservedEvent)
+            .onEvent(StepRetryScheduled::class.java, this::applyObservedEvent)
+            .onEvent(SubworkflowChildStarted::class.java, this::applyObservedEvent)
+            .onEvent(SubworkflowChildCompleted::class.java, this::applyObservedEvent)
+            .onEvent(SubworkflowChildFailed::class.java, this::applyObservedEvent)
+            .onEvent(ApprovalRequested::class.java, this::applyObservedEvent)
+            .onEvent(ApprovalReceived::class.java, this::applyObservedEvent)
+            .onEvent(RunPaused::class.java, this::applyObservedEvent)
+            .onEvent(RunResumed::class.java, this::applyObservedEvent)
+            .onEvent(RunCompleted::class.java, this::applyObservedEvent)
+            .onEvent(RunFailed::class.java, this::applyObservedEvent)
+            .onEvent(RunCancelled::class.java, this::applyObservedEvent)
             .build()
+
+    private fun applyObservedEvent(state: RunState, event: RunEvent): RunState {
+        eventObserver(event)
+        return state.applyEvent(event)
+    }
 
     private fun onCreateRun(state: RunState, cmd: CreateRun): Effect<RunEvent, RunState> {
         if (state.status != org.pekora.dsl.RunState.CREATED || state.definition != null) {

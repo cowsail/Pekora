@@ -37,6 +37,7 @@ import org.apache.pekko.persistence.typed.PersistenceId
 import org.pekora.adapters.native.NativeAgentRegistry
 import org.pekora.engine.*
 import org.pekora.policy.PolicyGuard
+import org.pekora.projection.RunProjectionStore
 import org.pekora.registry.*
 import org.slf4j.LoggerFactory
 
@@ -127,6 +128,7 @@ object FrameworkServer {
 
         val distributedWorkers = DistributedWorkersSettings.fromConfig(system.settings().config())
         val workDispatch = WorkDispatchFactory.bootstrap(system, distributedWorkers)
+        val runProjection = RunProjectionStore()
 
         // Initialize step executor with agent adapters, policy guard, and dispatch gateway
         val policyGuard = PolicyGuard()
@@ -160,6 +162,7 @@ object FrameworkServer {
                     approvalManager = approvalManager,
                     registry = registry,
                     sharding = sharding,
+                    eventObserver = runProjection::applyEvent,
                 )
             }
         )
@@ -176,7 +179,7 @@ object FrameworkServer {
         // Set up HTTP routes
         val allDirectives = object : AllDirectives() {}
         val workflowRoutes = WorkflowRoutes(registry, system)
-        val runRoutes = RunRoutes(sharding, registry, approvalManager, system)
+        val runRoutes = RunRoutes(sharding, registry, approvalManager, runProjection, system)
         val healthRoutes = HealthRoutes(agentAdapters, system)
 
         val route = allDirectives.concat(
