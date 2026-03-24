@@ -13,6 +13,7 @@ import org.pekora.dispatch.core.WorkQueueProvider
 import org.pekora.dispatch.pekko.PekkoWorkQueueProvider
 import org.pekora.worker.WorkerHost
 import org.pekora.worker.WorkerHostConfig
+import org.pekora.worker.ShardedStepResultSink
 import org.slf4j.LoggerFactory
 
 data class WorkDispatchBootstrap(
@@ -67,13 +68,14 @@ object WorkDispatchFactory {
         return (0 until replicas).map { index ->
             val actorName = "worker-host-${index + 1}"
             val config = workerConfig(settings, index)
+            val stepResultSink = ShardedStepResultSink(sharding)
             logger.info("Starting embedded worker {} of {} with id {}", index + 1, replicas, config.workerId)
             context.spawn(
                 WorkerHost.create(
                     config = config,
                     workQueueProvider = workQueueProvider,
                     agentAdapters = agentAdapters,
-                    sharding = sharding,
+                    stepResultSink = stepResultSink,
                 ),
                 actorName,
             )
@@ -95,13 +97,14 @@ object WorkDispatchFactory {
         return (0 until replicas).map { index ->
             val actorName = "worker-host-test-${index + 1}-${settings.embeddedWorkers.workerIdPrefix}"
             val config = workerConfig(settings, index)
+            val stepResultSink = ShardedStepResultSink(sharding)
             logger.info("Starting embedded worker {} of {} with id {}", index + 1, replicas, config.workerId)
             system.systemActorOf(
                 WorkerHost.create(
                     config = config,
                     workQueueProvider = workQueueProvider,
                     agentAdapters = agentAdapters,
-                    sharding = sharding,
+                    stepResultSink = stepResultSink,
                 ),
                 actorName,
                 Props.empty(),

@@ -6,14 +6,12 @@ import org.apache.pekko.actor.typed.javadsl.ActorContext
 import org.apache.pekko.actor.typed.javadsl.Behaviors
 import org.apache.pekko.actor.typed.javadsl.Receive
 import org.apache.pekko.actor.typed.javadsl.TimerScheduler
-import org.apache.pekko.cluster.sharding.typed.javadsl.ClusterSharding
 import org.pekora.adapters.AgentRuntimeAdapter
 import org.pekora.dispatch.core.LeasedWorkItem
+import org.pekora.dispatch.core.StepResultSink
 import org.pekora.dispatch.core.WorkQueueProvider
 import org.pekora.dsl.StepExecutionResult
 import org.pekora.dsl.StepResultStatus
-import org.pekora.engine.RunEntityTypeKey
-import org.pekora.engine.StepResult
 import org.slf4j.LoggerFactory
 import java.time.Duration
 
@@ -37,6 +35,11 @@ data class ExecutionDoneInternal(
     val result: StepExecutionResult? = null,
     val throwable: Throwable? = null,
 ) : WorkerHostMessage
+data class ResultSubmittedInternal(
+    val leased: LeasedWorkItem,
+    val success: Boolean,
+    val error: Throwable? = null,
+) : WorkerHostMessage
 
 class WorkerHost(
     context: ActorContext<WorkerHostMessage>,
@@ -44,7 +47,7 @@ class WorkerHost(
     private val config: WorkerHostConfig,
     private val workQueueProvider: WorkQueueProvider,
     private val agentAdapters: Map<String, AgentRuntimeAdapter>,
-    private val sharding: ClusterSharding,
+    private val stepResultSink: StepResultSink,
 ) : AbstractBehavior<WorkerHostMessage>(context) {
 
     companion object {
@@ -54,11 +57,11 @@ class WorkerHost(
             config: WorkerHostConfig,
             workQueueProvider: WorkQueueProvider,
             agentAdapters: Map<String, AgentRuntimeAdapter>,
-            sharding: ClusterSharding,
+            stepResultSink: StepResultSink,
         ): Behavior<WorkerHostMessage> = Behaviors.withTimers { timers ->
             Behaviors.setup { context ->
                 timers.startSingleTimer(PollTick, PollTick, Duration.ZERO)
-                WorkerHost(context, timers, config, workQueueProvider, agentAdapters, sharding)
+                WorkerHost(context, timers, config, workQueueProvider, agentAdapters, stepResultSink)
             }
         }
     }
@@ -71,6 +74,7 @@ class WorkerHost(
             .onMessage(ClaimedInternal::class.java, this::onClaimedInternal)
             .onMessage(ExecuteLease::class.java, this::onExecuteLease)
             .onMessage(ExecutionDoneInternal::class.java, this::onExecutionDone)
+            .onMessage(ResultSubmittedInternal::class.java, this::onResultSubmitted)
             .build()
 
     private fun onPollTick(): Behavior<WorkerHostMessage> {
@@ -129,17 +133,55 @@ class WorkerHost(
             error = msg.throwable?.message ?: "Unknown worker execution error",
         )
 
-        val runRef = sharding.entityRefFor(RunEntityTypeKey.typeKey, request.runId)
-        runRef.tell(StepResult(stepId = request.stepId, attempt = msg.leased.item.attempt, result = result))
+        context.pipeToSelf(
+            stepResultSink.submit(
+                runId = request.runId,
+                stepId = request.stepId,
+                attempt = msg.leased.item.attempt,
+                result = result,
+            )
+        ) { _, error ->
+            if (error != null) {
+                ResultSubmittedInternal(msg.leased, success = false, error = error)
+            } else {
+                ResultSubmittedInternal(msg.leased, success = true)
+            }
+        }
+        return this
+    }
 
-        workQueueProvider.ack(msg.leased.leaseId).whenComplete { _, ackError ->
-            if (ackError != null) {
+    private fun onResultSubmitted(msg: ResultSubmittedInternal): Behavior<WorkerHostMessage> {
+        val request = msg.leased.item.request
+        if (msg.success) {
+            workQueueProvider.ack(msg.leased.leaseId).whenComplete { _, ackError ->
+                if (ackError != null) {
+                    logger.warn(
+                        "Worker '{}' failed to ack lease '{}' for step '{}': {}",
+                        config.workerId,
+                        msg.leased.leaseId,
+                        request.stepId,
+                        ackError.message,
+                    )
+                }
+            }
+            return this
+        }
+
+        logger.warn(
+            "Worker '{}' failed to submit result for step '{}' attempt {}: {}",
+            config.workerId,
+            request.stepId,
+            msg.leased.item.attempt,
+            msg.error?.message,
+        )
+        workQueueProvider.release(msg.leased.leaseId, "result submission failed").whenComplete { _, releaseError ->
+            if (releaseError != null) {
                 logger.warn(
-                    "Worker '{}' failed to ack lease '{}' for step '{}': {}",
+                    "Worker '{}' failed to release lease '{}' for step '{}': {}",
                     config.workerId,
                     msg.leased.leaseId,
                     request.stepId,
-                    ackError.message,
+                    releaseError.message,
                 )
             }
         }
